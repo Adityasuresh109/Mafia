@@ -2,7 +2,9 @@
 
 A dramatic, phone-only Mafia / Werewolf party game for **7–30 players plus exactly one non-playing host**. No accounts, no TV and no paid service required within applicable Cloudflare free-tier quotas.
 
-**Status:** pre-release build, not verified live. Real-device playtest and Cloudflare deployment still required.
+**Status:** live on Cloudflare Workers with verified production smoke tests. A full real-device 30-player playtest is still required before calling v1.0 production-certified.
+
+**Play now:** https://ad-arcade-mafia-night.adityasuresh2110.workers.dev — create a room as the single host, then share the in-game guest invitation link.
 
 ## Gameplay
 
