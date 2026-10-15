@@ -51,7 +51,7 @@ function vibrateOnTurn(s){const key=playerCanAct(s)?`${s.code}:${s.round}:${s.ph
  if(key&&key!==lastActionKey){try{navigator.vibrate?.(85);}catch{}}
  lastActionKey=key;
 }
-function wantsWakeLock(){return !!(session&&state?.kind==='PLAYER'&&!returnHome&&!['LOBBY','GAME_OVER','ENDED'].includes(state.phase)&&document.visibilityState!=='hidden');}
+function wantsWakeLock(){return !!(session&&['PLAYER','HOST'].includes(state?.kind)&&!returnHome&&!['LOBBY','GAME_OVER','ENDED'].includes(state.phase)&&document.visibilityState!=='hidden');}
 function updateWakeLock(){
  if(!wantsWakeLock()){
   if(wakeSentinel){const held=wakeSentinel;wakeSentinel=null;Promise.resolve(held.release()).catch(()=>{});}
@@ -67,6 +67,7 @@ function updateWakeLock(){
 document.addEventListener?.('visibilitychange',updateWakeLock);
 
 let session=JSON.parse(localStorage.getItem(store)||'null'),state=null,ws=null,selected=[],revealed=false,formConfig=null,returnHome=false,lastVersion=-1;
+let lastConnectionErrorAt=0,lastReconnectAttemptAt=0,reconnectDelayMs=4000;
 const h=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const name=id=>state?.roster?.find(p=>p.id===id)?.name||id;
 const eliminatedName=id=>{const p=state?.roster?.find(x=>x.id===id);return p?`${h(p.name)}${p.role?' ('+h(p.role)+')':''}`:h(id);};
@@ -94,8 +95,8 @@ const endpoint=(action)=>`/api/rooms/${session.code}/${action}`;
 async function command(type,values={}){const payload={type,...values};if(state?.kind==='HOST')payload.expectedVersion=state.version;
  try{const data=await request(endpoint('action'),{method:'POST',body:payload});putState(data.state);}catch(error){alertMsg(error.message);await refresh();}}
 function setOnline(online){status.className='connection '+(online?'online':'offline');status.textContent=online?'● CONNECTED':'● RECONNECTING';}
-function putState(snapshot){if(!snapshot)return;if(snapshot.version!==lastVersion){if(state?.phase!==snapshot.phase||snapshot.choiceLocked||snapshot.myVote)selected=[];if(state?.phase!=='DEAL'&&snapshot.phase==='DEAL')revealed=false;lastVersion=snapshot.version;}state=snapshot;recordPublicStory(snapshot);vibrateOnTurn(snapshot);updateWakeLock();render();}
-async function refresh(){if(!session)return;try{const data=await request(endpoint('state'));putState(data.state);setOnline(true);}catch(error){setOnline(false);alertMsg(error.message);}}
+function putState(snapshot){if(!snapshot)return;if(state?.code===snapshot.code&&snapshot.version<lastVersion)return;if(snapshot.version!==lastVersion){if(state?.phase!==snapshot.phase||snapshot.choiceLocked||snapshot.myVote)selected=[];if(state?.phase!=='DEAL'&&snapshot.phase==='DEAL')revealed=false;lastVersion=snapshot.version;}state=snapshot;recordPublicStory(snapshot);vibrateOnTurn(snapshot);updateWakeLock();render();}
+async function refresh(){if(!session)return false;try{const data=await request(endpoint('state'));putState(data.state);setOnline(true);lastConnectionErrorAt=0;reconnectDelayMs=4000;return true;}catch(error){setOnline(false);if(Date.now()-lastConnectionErrorAt>=30000){alertMsg(error.message);lastConnectionErrorAt=Date.now();}reconnectDelayMs=Math.min(reconnectDelayMs*2,30000);return false;}}
 function connect(){if(ws){ws.onclose=null;ws.close();}if(!session)return;
  try{ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}${endpoint('ws')}`,['mafia','t-'+session.token]);ws.onopen=()=>setOnline(true);ws.onmessage=e=>{try{const msg=JSON.parse(e.data);if(msg.type==='STATE')putState(msg.state);}catch{}};ws.onclose=()=>{setOnline(false);};ws.onerror=()=>setOnline(false);}catch{setOnline(false);}}
 function remember(s){session={code:s.code,token:s.token};saved();state=s.state;lastVersion=-1;selected=[];revealed=false;returnHome=false;putState(s.state);connect();}
@@ -165,7 +166,7 @@ function playerView(){const phase=getPhase();const self=state.self;let content=p
  if(phase==='RESULTS')return content+panel('The Town Has Spoken',`${(state.lastEliminations||[]).length?`<p class="script">${state.lastEliminations.map(eliminatedName).join(', ')} ${state.lastEliminations.length===1?'was':'were'} voted out.</p>`:'<p class="script">“The town could not agree. Nobody leaves.”</p>'}`)+publicExtras();
  return content+panel('Waiting for Host','<p class="note">Stay on this screen for the next instruction.</p>');
 }
-function publicExtras(){return state.policeReport?.length?panel('Private Police Report',state.policeReport.map(r=>`<div class="countline"><span>${h(r.name)}</span><strong>${r.isMafia?'🔪 MAFIA':'✓ NOT MAFIA'}</strong></div>`).join('')):'';}
+function publicExtras(){return state.policeReport?.length?panel('Private Police Report',state.policeReport.map(r=>`<div class="countline"><span>${r.round?`Round ${r.round} · `:''}${h(r.name)}</span><strong>${r.isMafia?'🔪 MAFIA':'✓ NOT MAFIA'}</strong></div>`).join('')):'';}
 function roleCard(self){const descriptions={MAFIA:'At night, secretly choose whom the town loses.',DOCTOR:'At night, choose who will survive an attack.',POLICE:'At night, investigate the identity of others.',CIVILIAN:'Discover the Mafia through discussion and voting.'};return `<div class="rolecard"><div class="symbol">${roleIcons[self.role]||'♠'}</div><div class="eyecap">YOUR ROLE IS</div><h2>${h(self.role)}</h2><p>${descriptions[self.role]||''}</p><p class="tiny muted">No other player's role is visible.</p></div>`;}
 function render(){if(returnHome||!session||!state){app.innerHTML=home();status.textContent='● READY';updateWakeLock();return;}app.innerHTML=(state.kind==='HOST'?hostView():playerView())+storyMarkup();}
 async function copyText(text){try{await navigator.clipboard.writeText(text);alertMsg('Copied to clipboard.');}catch{alertMsg('Could not copy. Please copy the link manually.');}}
@@ -194,5 +195,5 @@ app.addEventListener('click',async e=>{
  if(action==='endParty'){if(confirm('END PARTY? This closes the current game for every player. You cannot return to this room.'))return command('END_ROOM');}
 });
 const hash=new URLSearchParams(location.hash.slice(1));if(hash.has('host')&&hash.has('room')&&/^[A-HJ-NP-Z2-9]{6}$/.test(hash.get('room'))){session={code:hash.get('room'),token:hash.get('host')};saved();history.replaceState(null,'',location.pathname);}
-if(session?.code&&session?.token){refresh().then(connect);}else render();
-setInterval(()=>{document.querySelectorAll('[data-countdown]').forEach(el=>el.textContent=countdown());if(session&&ws?.readyState!==1)refresh().then(()=>{if(!ws||ws.readyState===3)connect();});},4000);
+if(session?.code&&session?.token){refresh().then(ok=>{if(ok)connect();});}else render();
+setInterval(()=>{document.querySelectorAll('[data-countdown]').forEach(el=>el.textContent=countdown());if(session&&ws?.readyState!==1&&Date.now()-lastReconnectAttemptAt>=reconnectDelayMs){lastReconnectAttemptAt=Date.now();refresh().then(ok=>{if(ok&&(!ws||ws.readyState===3))connect();});}},4000);
