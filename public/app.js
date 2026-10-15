@@ -1,6 +1,63 @@
 'use strict';
 const app=document.getElementById('app'),status=document.getElementById('connection'),toastBox=document.getElementById('toast');
 const store='ad-arcade-mafia-session-v1';
+const joinUrl=code=>`${location.origin}${location.pathname}#join=${code}`;
+const storyPrefix='ad-arcade-mafia-public-story-v1-';
+let storyEntries=[],storyKey='',storyExpanded=false,lastActionKey=null,wakeSentinel=null,wakeRequest=null;
+function storyStorageKey(snapshot){return `${storyPrefix}${snapshot.code}-${snapshot.kind==='HOST'?'HOST':snapshot.self?.id||'PLAYER'}`;}
+function recordPublicStory(snapshot){
+ if(!session||!snapshot||snapshot.phase==='LOBBY')return;
+ const key=storyStorageKey(snapshot);
+ if(key!==storyKey){storyKey=key;try{storyEntries=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(storyEntries))storyEntries=[];}catch{storyEntries=[];}}
+ // Another game in the same room starts with a fresh story.
+ if(snapshot.round===0&&snapshot.phase==='CONFIG'&&storyEntries.length)storyEntries=[];
+ const round=snapshot.round;
+ if(round>0&&snapshot.announced&&typeof snapshot.announcement==='string'){
+  const ann=snapshot.announcement;
+  const summary=ann==='No one died last night.'?'No one died.':ann.replace(/ died last night\.$/,' was killed.');
+  const key=`night-${round}`;
+  if(!storyEntries.some(x=>x.key===key))storyEntries.push({key,text:`Night ${round} — ${summary}`});
+ }
+ // RESULTS comes only after the vote. GAME_OVER may follow a night or a vote:
+ // resultTallies proves a vote concluded, preventing a night death from becoming a Day entry.
+ if(round>0&&(snapshot.phase==='RESULTS'||snapshot.phase==='GAME_OVER'&&Object.keys(snapshot.resultTallies||{}).length>0)){
+  const ids=snapshot.lastEliminations||[];
+  const readable=ids.map(id=>{
+    const p=snapshot.roster?.find(x=>x.id===id);
+    return p?`${p.name}${p.role?' ('+p.role+')':''}`:null;
+  }).filter(Boolean);
+  // Only record publicly revealed roles. If a snapshot is incomplete, omit the event.
+  if(ids.length===readable.length){const key=`day-${round}`;
+   if(!storyEntries.some(x=>x.key===key))storyEntries.push({key,text:`Day ${round} — ${readable.length?readable.join(', ')+(readable.length===1?' was':' were')+' voted out.':'No one was voted out.'}`});}
+ }
+ storyEntries.sort((a,b)=>Number(a.key.split('-')[1])-Number(b.key.split('-')[1])||(a.key.startsWith('night-')?-1:1));
+ try{localStorage.setItem(key,JSON.stringify(storyEntries));}catch{}
+}
+function storyMarkup(){
+ if(!state||['LOBBY','CONFIG'].includes(state.phase))return '';
+ const rows=storyEntries.map(e=>`<li>${h(e.text)}</li>`).join('');
+ return `<details class="story" ${storyExpanded?'open':''}><summary>Story so far</summary>${rows?`<ul>${rows}</ul>`:'<p class="note">The story begins after the first announcement.</p>'}</details>`;
+}
+function playerCanAct(s){return s?.kind==='PLAYER'&&s.self?.alive&&((s.phase.startsWith('NIGHT_')&&s.canAct&&!s.choiceLocked)||(['VOTE','VOTE_2'].includes(s.phase)&&!s.myVote));}
+function vibrateOnTurn(s){const key=playerCanAct(s)?`${s.code}:${s.round}:${s.phase}:${s.self.id}`:null;
+ if(key&&key!==lastActionKey){try{navigator.vibrate?.(85);}catch{}}
+ lastActionKey=key;
+}
+function wantsWakeLock(){return !!(session&&state?.kind==='PLAYER'&&!returnHome&&!['LOBBY','GAME_OVER','ENDED'].includes(state.phase)&&document.visibilityState!=='hidden');}
+function updateWakeLock(){
+ if(!wantsWakeLock()){
+  if(wakeSentinel){const held=wakeSentinel;wakeSentinel=null;Promise.resolve(held.release()).catch(()=>{});}
+  return;
+ }
+ if(wakeSentinel||wakeRequest||typeof navigator==='undefined'||!navigator.wakeLock?.request)return;
+ wakeRequest=Promise.resolve().then(()=>navigator.wakeLock.request('screen')).then(lock=>{
+   wakeSentinel=lock;
+   lock.addEventListener?.('release',()=>{if(wakeSentinel===lock)wakeSentinel=null;});
+   if(!wantsWakeLock()){wakeSentinel=null;return lock.release();}
+ }).catch(()=>{}).finally(()=>{wakeRequest=null;});
+}
+document.addEventListener?.('visibilitychange',updateWakeLock);
+
 let session=JSON.parse(localStorage.getItem(store)||'null'),state=null,ws=null,selected=[],revealed=false,formConfig=null,returnHome=false,lastVersion=-1;
 const h=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const name=id=>state?.roster?.find(p=>p.id===id)?.name||id;
@@ -29,7 +86,7 @@ const endpoint=(action)=>`/api/rooms/${session.code}/${action}`;
 async function command(type,values={}){const payload={type,...values};if(state?.kind==='HOST')payload.expectedVersion=state.version;
  try{const data=await request(endpoint('action'),{method:'POST',body:payload});putState(data.state);}catch(error){alertMsg(error.message);await refresh();}}
 function setOnline(online){status.className='connection '+(online?'online':'offline');status.textContent=online?'● CONNECTED':'● RECONNECTING';}
-function putState(snapshot){if(!snapshot)return;if(snapshot.version!==lastVersion){if(state?.phase!==snapshot.phase||snapshot.choiceLocked||snapshot.myVote)selected=[];if(state?.phase!=='DEAL'&&snapshot.phase==='DEAL')revealed=false;lastVersion=snapshot.version;}state=snapshot;render();}
+function putState(snapshot){if(!snapshot)return;if(snapshot.version!==lastVersion){if(state?.phase!==snapshot.phase||snapshot.choiceLocked||snapshot.myVote)selected=[];if(state?.phase!=='DEAL'&&snapshot.phase==='DEAL')revealed=false;lastVersion=snapshot.version;}state=snapshot;recordPublicStory(snapshot);vibrateOnTurn(snapshot);updateWakeLock();render();}
 async function refresh(){if(!session)return;try{const data=await request(endpoint('state'));putState(data.state);setOnline(true);}catch(error){setOnline(false);alertMsg(error.message);}}
 function connect(){if(ws){ws.onclose=null;ws.close();}if(!session)return;
  try{ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}${endpoint('ws')}`,['mafia','t-'+session.token]);ws.onopen=()=>setOnline(true);ws.onmessage=e=>{try{const msg=JSON.parse(e.data);if(msg.type==='STATE')putState(msg.state);}catch{}};ws.onclose=()=>{setOnline(false);};ws.onerror=()=>setOnline(false);}catch{setOnline(false);}}
@@ -40,7 +97,7 @@ function hostView(){const phase=getPhase();let content=phaseHeading();
  if(state.policeReport?.length)content+=panel('Police Investigations — Host Only',state.policeReport.map(r=>`<div class="countline"><span>Round ${r.round} · ${h(r.name)}</span><strong>${r.isMafia?'🔪 MAFIA':'✓ NOT MAFIA'}</strong></div>`).join(''));
  if(phase==='LOBBY'){
  const joinLink=`${location.origin}${location.pathname}#join=${state.code}`;
- content+=panel('YOUR PRIVATE ROOM',`<div class="roomcode">${state.code}</div><div class="center tiny muted">Players enter this code. Keep the host recovery link private.</div><div class="buttonrow">${button('COPY JOIN LINK','invite','secondary')}${button('COPY HOST RECOVERY LINK','recover','quiet')}</div>`);
+ content+=panel('YOUR PRIVATE ROOM',`<div class="roomcode">${state.code}</div><div class="join-qr">${window.MafiaQRCode?.render(joinUrl(state.code))||''}<p class="note">Scan to join the party</p></div><div class="center tiny muted">Players enter this code. Keep the host recovery link private.</div><div class="buttonrow">${button('COPY JOIN LINK','invite','secondary')}${button('COPY HOST RECOVERY LINK','recover','quiet')}</div>`);
  content+=panel(`Guest List · ${state.roster.length}/30`,`${rosterList()}${state.roster.length?`<p class="note">Tap below to remove a guest from the waiting lobby.</p><select id="removePlayer" class="field"><option value="">Choose guest</option>${state.roster.map(p=>`<option value="${p.id}">${h(p.name)}</option>`).join('')}</select><div class="buttonrow">${button('REMOVE SELECTED','remove','danger')}</div>`:''}`);
  content+=button(`LOCK LOBBY (${state.roster.length} / 7 MINIMUM)`,'lock','block');
  }
@@ -102,8 +159,9 @@ function playerView(){const phase=getPhase();const self=state.self;let content=p
 }
 function publicExtras(){return state.policeReport?.length?panel('Private Police Report',state.policeReport.map(r=>`<div class="countline"><span>${h(r.name)}</span><strong>${r.isMafia?'🔪 MAFIA':'✓ NOT MAFIA'}</strong></div>`).join('')):'';}
 function roleCard(self){const descriptions={MAFIA:'At night, secretly choose whom the town loses.',DOCTOR:'At night, choose who will survive an attack.',POLICE:'At night, investigate the identity of others.',CIVILIAN:'Discover the Mafia through discussion and voting.'};return `<div class="rolecard"><div class="symbol">${roleIcons[self.role]||'♠'}</div><div class="eyecap">YOUR ROLE IS</div><h2>${h(self.role)}</h2><p>${descriptions[self.role]||''}</p><p class="tiny muted">No other player's role is visible.</p></div>`;}
-function render(){if(returnHome||!session||!state){app.innerHTML=home();status.textContent='● READY';return;}app.innerHTML=state.kind==='HOST'?hostView():playerView();}
+function render(){if(returnHome||!session||!state){app.innerHTML=home();status.textContent='● READY';updateWakeLock();return;}app.innerHTML=(state.kind==='HOST'?hostView():playerView())+storyMarkup();}
 async function copyText(text){try{await navigator.clipboard.writeText(text);alertMsg('Copied to clipboard.');}catch{alertMsg('Could not copy. Please copy the link manually.');}}
+app.addEventListener('toggle',e=>{if(e.target.matches?.('details.story'))storyExpanded=e.target.open;},true);
 app.addEventListener('submit',async e=>{e.preventDefault();const form=e.target;
  if(form.id==='join'){const f=new FormData(form),code=String(f.get('code')).trim().toUpperCase().replace(/\s/g,''),name=String(f.get('name')).trim();if(!/^[A-HJ-NP-Z2-9]{6}$/.test(code)){alertMsg('Enter the valid six-character room code.');return;}
  try{const data=await request(`/api/rooms/${code}/join`,{method:'POST',body:{name},authenticated:false});remember(data);}catch(error){alertMsg(error.message);} }
@@ -113,9 +171,9 @@ app.addEventListener('click',async e=>{
  const target=e.target.closest('[data-target]');if(target){const id=target.dataset.target;
  if(state?.phase?.startsWith('NIGHT_')){const max=state.phase==='NIGHT_MAFIA'?state.config.kills:state.phase==='NIGHT_DOCTOR'?state.config.saves:state.config.checks;selected=selected.includes(id)?selected.filter(x=>x!==id):selected.length<max?[...selected,id]:selected;}else if(state?.phase?.startsWith('VOTE'))selected=[id];render();return;}
  const btn=e.target.closest('[data-act]');if(!btn)return;const action=btn.dataset.act;
- if(action==='newRoom'){if(ws){ws.onclose=null;ws.close();}localStorage.removeItem(store);session=null;state=null;selected=[];returnHome=false;history.replaceState(null,'',location.pathname);return render();}
+ if(action==='newRoom'){if(ws){ws.onclose=null;ws.close();}localStorage.removeItem(store);session=null;state=null;selected=[];storyEntries=[];storyKey='';storyExpanded=false;lastActionKey=null;returnHome=false;updateWakeLock();history.replaceState(null,'',location.pathname);return render();}
  if(action==='create'){btn.disabled=true;try{const data=await request('/api/rooms',{method:'POST',body:{},authenticated:false});remember(data);}catch(error){alertMsg(error.message);btn.disabled=false;}return;}
- if(action==='invite')return copyText(`${location.origin}${location.pathname}#join=${session.code}`);
+ if(action==='invite')return copyText(joinUrl(session.code));
  if(action==='recover')return copyText(`${location.origin}${location.pathname}#host=${session.token}&room=${session.code}`);
  if(action==='remove'){const id=document.getElementById('removePlayer')?.value;if(!id)return alertMsg('Choose a player first.');return command('REMOVE',{playerId:id});}
  if(action==='lock')return command('LOCK');if(action==='deal')return command('DEAL');if(action==='next')return command('NEXT');
