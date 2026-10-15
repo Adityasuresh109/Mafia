@@ -18,7 +18,7 @@ export function createGame({roomCode,hostToken}) {
   ASSERT(typeof hostToken==='string'&&hostToken.length>0,'Missing primary host credential');
   return {
     code:roomCode, version:0, phase:'LOBBY', hostToken, players:[], nextPlayerId:1, config:null, round:0,
-    night:null, ballots:{}, runoff:null, deadline:null,
+    night:null, ballots:{}, runoff:null, deadline:null, policeHistory:[],
     announcement:null, announced:false, lastEliminations:[], resultTallies:{}, winner:null,
   };
 }
@@ -189,7 +189,9 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
       }else if(command.method==='majority') selected=finalizeMajority(countsFor(s,phase),n,command.tiebreak);
       else throw new Error('Choose consensus, majority, or skip');
       const key=({NIGHT_MAFIA:'kills',NIGHT_DOCTOR:'saves',NIGHT_POLICE:'checks'})[phase];
-      s.night[key]=selected;advanceNight(s);break;
+      s.night[key]=selected;
+      if(phase==='NIGHT_POLICE')s.policeHistory=[...(s.policeHistory||[]),...selected.map(id=>({round:s.round,targetId:id,name:member(s,id).name,isMafia:member(s,id).role==='MAFIA'}))];
+      advanceNight(s);break;
     }
     case 'ANNOUNCE': {
       ensurePhase(s,'MORNING');ASSERT(!s.announced,'Already announced');
@@ -244,7 +246,7 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
     case 'PLAY_AGAIN': {
       ASSERT(s.phase==='GAME_OVER','Play again requires a finished game-over session');s.players.forEach(p=>{p.alive=true;p.role=null;});
       s.phase='CONFIG';s.round=0;s.night=null;s.ballots={};s.runoff=null;s.deadline=null;
-      s.announcement=null;s.announced=false;s.winner=null;s.lastEliminations=[];s.resultTallies={};break;
+      s.announcement=null;s.announced=false;s.winner=null;s.lastEliminations=[];s.resultTallies={};s.policeHistory=[];break;
     }
     default:throw new Error('Unknown command');
   }
@@ -277,7 +279,7 @@ export function viewFor(state,token) {
       resolved:{kills:state.night.kills,saves:state.night.saves,checks:state.night.checks},
     }:null;
     return {...basic,kind:'HOST',roster,night,
-      hostCount:1,ballots:{...state.ballots},
+      hostCount:1,ballots:{...state.ballots},policeReport:(state.policeHistory||[]).map(report=>({...report})),
       runoff:state.runoff?{...state.runoff}:null,
       pendingDeaths:phase==='MORNING'&&!state.announced?[...state.night.deaths]:undefined,
       lastEliminations:[...state.lastEliminations],resultTallies:{...state.resultTallies}};
@@ -291,7 +293,7 @@ export function viewFor(state,token) {
      !['DEAL','NIGHT_MAFIA','NIGHT_DOCTOR','NIGHT_POLICE'].includes(currentPhase)){
     view.policeReport=state.night.checks.map(id=>({targetId:id,name:member(state,id).name,isMafia:member(state,id).role==='MAFIA'}));
   }
-  if(state.phase==='VOTE_2')view.runoffCandidates=[...state.runoff.candidates];
+  if(state.phase==='VOTE_2')view.runoff={candidates:[...state.runoff.candidates]};
   if(state.phase==='RESULTS') {view.lastEliminations=[...state.lastEliminations];view.resultTallies={...state.resultTallies};}
   return view;
 }
