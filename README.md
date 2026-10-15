@@ -52,3 +52,7 @@ For automation, add Cloudflare deployment secrets to GitHub Actions instead of c
 - Avoid screen peeking during the role reveal; there is no in-app identity list for other living players.
 - The app protects roles and votes on the server. Do not broadcast the raw server state object.
 - **A passing mock test suite is not a substitute for testing in Cloudflare and with 30 real phones.**
+
+## Production operations
+
+See [release freeze, known-good Cloudflare version, and emergency rollback instructions](docs/operations/production-rollback.md). After this stabilization release is verified, deployment will be triggered manually via GitHub Actions rather than automatically with every code push.
