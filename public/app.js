@@ -9,6 +9,14 @@ function recordPublicStory(snapshot){
  if(!session||!snapshot||snapshot.phase==='LOBBY')return;
  const key=storyStorageKey(snapshot);
  if(key!==storyKey){storyKey=key;try{storyEntries=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(storyEntries))storyEntries=[];}catch{storyEntries=[];}}
+ // Server-persisted public events are authoritative: they survive reconnects,
+ // cleared browser storage and identity recovery on another phone.
+ if(Array.isArray(snapshot.publicHistory)){
+  storyEntries=snapshot.publicHistory.map(event=>({key:event.key,text:event.text}));
+  try{localStorage.setItem(key,JSON.stringify(storyEntries));}catch{}
+  return;
+ }
+ // Legacy fallback for old server snapshots without the public history field.
  // Another game in the same room starts with a fresh story.
  if(snapshot.round===0&&snapshot.phase==='CONFIG'&&storyEntries.length)storyEntries=[];
  const round=snapshot.round;
