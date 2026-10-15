@@ -50,20 +50,28 @@ for(const p of state.roster){
  await player(p.id,'BALLOT',{targetId:j<0||j>=4?'ABSTAIN':j<2?a:b});
 }
 await host('CLOSE_VOTE');assert.equal(state.phase,'DISCUSS_2');
-await host('END_DISCUSSION');assert.equal(state.phase,'VOTE_2');
+assert.ok(state.deadline>Date.now(),'runoff discussion must have a live 60-second deadline');
+// Use the real Durable Object alarm: the game must auto-enter the runoff vote.
+await new Promise(resolve=>setTimeout(resolve,63000));
+state=(await call(root+'/state','GET',undefined,owner.token)).state;
+assert.equal(state.phase,'VOTE_2','the runoff timer must advance without host intervention');
 const runoff=(await call(root+'/state','GET',undefined,tokenFor(voters[4].id))).state;
 assert.deepEqual([...runoff.runoff.candidates].sort(),[a,b].sort());
 await call(root+'/action','POST',{type:'BALLOT',targetId:voters[0].id},tokenFor(voters[4].id),400);
 for(const p of state.roster)await player(p.id,'BALLOT',{targetId:p.id===a?'ABSTAIN':a});
 await host('CLOSE_VOTE');assert.equal(state.phase,'RESULTS');assert.deepEqual(state.lastEliminations,[a]);
 assert.deepEqual(state.publicHistory.map(x=>x.key),['night-1','day-1']);
-await host('NEXT');await host('FINALIZE_NIGHT',{method:'skip'});await host('FINALIZE_NIGHT',{method:'skip'});
+await host('NEXT');
+const earlierVotedOut=(await call(root+'/state','GET',undefined,tokenFor(civilians[1].id))).state;
+assert.equal(earlierVotedOut.roster.find(p=>p.id===a).role,'MAFIA','revealed roles persist into the next night');
+await host('FINALIZE_NIGHT',{method:'skip'});await host('FINALIZE_NIGHT',{method:'skip'});
 await player(cop.id,'NIGHT_PICK',{targets:[civilians[1].id]});
 await host('FINALIZE_NIGHT',{method:'consensus'});
 assert.deepEqual(state.policeReport,[
  {round:1,targetId:a,name:mafia[0].name,isMafia:true},
  {round:2,targetId:civilians[1].id,name:civilians[1].name,isMafia:false},
 ]);
+assert.deepEqual((await call(root+'/state','GET',undefined,tokenFor(cop.id))).state.policeReport.map(p=>p.round),[1,2],'Police retain private prior-round checks');
 assert.equal((await call(root+'/state','GET',undefined,tokenFor(doctor.id))).state.policeReport,undefined);
 await host('ANNOUNCE');
 const reconnectedGuest=(await call(root+'/state','GET',undefined,tokenFor(civilians[1].id))).state;

@@ -20,7 +20,17 @@ export function websocketIdentity(state,offered=''){
 const enforceJson=async request=>{const raw=await request.text();if(raw.length>8192)throw new Error('Request is too large');try{return JSON.parse(raw||'{}');}catch{throw new Error('Invalid JSON');}};
 
 export class MafiaRoom {
-  constructor(ctx,env){this.ctx=ctx;this.env=env;this.serialQueue=Promise.resolve();}
+  constructor(ctx,env){this.ctx=ctx;this.env=env;this.serialQueue=Promise.resolve();this.rateBuckets=new Map();}
+  rateLimited(request,route){
+    if(!['join','action'].includes(route))return false;
+    const ip=request.headers.get('CF-Connecting-IP')||'unknown';
+    const now=Date.now(),prior=this.rateBuckets.get(ip);
+    const bucket=!prior||now-prior.started>=10000?{started:now,count:0}:prior;
+    bucket.count++;this.rateBuckets.set(ip,bucket);
+    if(this.rateBuckets.size>2000)for(const [key,b] of this.rateBuckets)if(now-b.started>=10000)this.rateBuckets.delete(key);
+    // 120 requests / 10 s permits 30 people sharing a Wi-Fi IP.
+    return bucket.count>120;
+  }
   serialize(work){const next=this.serialQueue.then(work);this.serialQueue=next.catch(()=>{});return next;}
   async load(){return await this.ctx.storage.get('state');}
   async save(state){await this.ctx.storage.put('state',state);await this.schedule(state);}
@@ -46,6 +56,7 @@ export class MafiaRoom {
         await this.save(state);
         return json({code:state.code,token:state.hostToken,state:viewFor(state,state.hostToken)},201);
       }
+      if(this.rateLimited(request,route))return failure('Too many requests. Try again shortly.',429);
       if(route==='ws'){
         if(request.headers.get('upgrade')?.toLowerCase()!=='websocket')return failure('WebSocket required',426);
         const state=await this.load();
@@ -53,7 +64,7 @@ export class MafiaRoom {
         if(!principal)return failure('WebSocket session invalid',401);
         const origin=request.headers.get('origin');
         if(origin&&origin!==new URL(request.url).origin)return failure('Origin not allowed',403);
-        if(this.ctx.getWebSockets().length>=40)return failure('Room connection limit reached',429);
+        if(this.ctx.getWebSockets().length>=64)return failure('Room connection limit reached',429);
         const pair=new WebSocketPair(),[client,server]=Object.values(pair);
         this.ctx.acceptWebSocket(server);server.serializeAttachment({id:principal.id});
         server.send(JSON.stringify({type:'STATE',state:viewFor(state,principal.token)}));

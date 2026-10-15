@@ -18,7 +18,7 @@ export function createGame({roomCode,hostToken}) {
   ASSERT(typeof hostToken==='string'&&hostToken.length>0,'Missing primary host credential');
   return {
     code:roomCode, version:0, phase:'LOBBY', hostToken, players:[], nextPlayerId:1, config:null, round:0,
-    night:null, ballots:{}, runoff:null, deadline:null, policeHistory:[], publicHistory:[],
+    night:null, ballots:{}, runoff:null, deadline:null, policeHistory:[], publicHistory:[], publicReveals:[],
     announcement:null, announced:false, lastEliminations:[], resultTallies:{}, winner:null,
   };
 }
@@ -190,7 +190,7 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
       else throw new Error('Choose consensus, majority, or skip');
       const key=({NIGHT_MAFIA:'kills',NIGHT_DOCTOR:'saves',NIGHT_POLICE:'checks'})[phase];
       s.night[key]=selected;
-      if(phase==='NIGHT_POLICE')s.policeHistory=[...(s.policeHistory||[]),...selected.map(id=>({round:s.round,targetId:id,name:member(s,id).name,isMafia:member(s,id).role==='MAFIA'}))];
+      if(phase==='NIGHT_POLICE')s.policeHistory=[...(s.policeHistory||[]),...selected.map(id=>({round:s.round,targetId:id,name:member(s,id).name,isMafia:member(s,id).role==='MAFIA',submittedBy:Object.keys(s.night.picks.NIGHT_POLICE)}))];
       advanceNight(s);break;
     }
     case 'ANNOUNCE': {
@@ -199,6 +199,7 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
       s.announcement=names.length?`${names.map(p=>`${p.name} (${p.role})`).join(', ')} died last night.`:'No one died last night.';
       eliminate(s,s.night.deaths);
       s.announced=true;
+      s.publicReveals=[...new Set([...(s.publicReveals||[]),...names.map(p=>p.id)])];
       // Persist only after the host has publicly announced this night's outcome.
       const killed=names.map(p=>`${p.name} (${p.role})`);
       const nightText=killed.length?`${killed.join(', ')} ${killed.length===1?'was':'were'} killed.`:'No one died.';
@@ -241,7 +242,8 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
         eliminate(s,winners);
         if(s.phase!=='GAME_OVER')s.phase='RESULTS';
       }
-      s.deadline=null;
+      if(s.phase!=='DISCUSS_2')s.deadline=null;
+      if(s.phase==='RESULTS'||s.phase==='GAME_OVER')s.publicReveals=[...new Set([...(s.publicReveals||[]),...s.lastEliminations])];
       // A runoff is not a completed day vote; publish only the final result.
       if(['RESULTS','GAME_OVER'].includes(s.phase)){
         const ousted=s.lastEliminations.map(id=>member(s,id));
@@ -256,7 +258,7 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
     case 'PLAY_AGAIN': {
       ASSERT(s.phase==='GAME_OVER','Play again requires a finished game-over session');s.players.forEach(p=>{p.alive=true;p.role=null;});
       s.phase='CONFIG';s.round=0;s.night=null;s.ballots={};s.runoff=null;s.deadline=null;
-      s.announcement=null;s.announced=false;s.winner=null;s.lastEliminations=[];s.resultTallies={};s.policeHistory=[];s.publicHistory=[];break;
+      s.announcement=null;s.announced=false;s.winner=null;s.lastEliminations=[];s.resultTallies={};s.policeHistory=[];s.publicHistory=[];s.publicReveals=[];break;
     }
     default:throw new Error('Unknown command');
   }
@@ -276,7 +278,7 @@ export function viewFor(state,token) {
   const isHost=Boolean(host);
   const roster=state.players.map(p=>{
     const entry=publicPlayer(p);
-    if(isHost||state.phase==='GAME_OVER'||(!p.alive&&state.announced)||
+    if(isHost||state.phase==='GAME_OVER'||(state.publicReveals||[]).includes(p.id)||(!p.alive&&state.announced)||
       (!p.alive&&['RESULTS'].includes(state.phase))) entry.role=p.role;
     return entry;
   });
@@ -290,7 +292,7 @@ export function viewFor(state,token) {
       resolved:{kills:state.night.kills,saves:state.night.saves,checks:state.night.checks},
     }:null;
     return {...basic,kind:'HOST',roster,night,
-      hostCount:1,ballots:{...state.ballots},policeReport:(state.policeHistory||[]).map(report=>({...report})),
+      hostCount:1,ballots:{...state.ballots},policeReport:(state.policeHistory||[]).map(({submittedBy,...report})=>report),
       runoff:state.runoff?{...state.runoff}:null,
       pendingDeaths:phase==='MORNING'&&!state.announced?[...state.night.deaths]:undefined,
       lastEliminations:[...state.lastEliminations],resultTallies:{...state.resultTallies}};
@@ -300,9 +302,11 @@ export function viewFor(state,token) {
   const view={...basic,kind:'PLAYER',roster,self:{id:player.id,name:player.name,role:player.role,alive:player.alive},
     canAct,choiceLocked:canAct&&Object.hasOwn(state.night.picks[currentPhase],player.id),
     myVote:state.ballots[player.id]};
-  if(player.role==='POLICE'&&state.night?.picks.NIGHT_POLICE[player.id]&&
-     !['DEAL','NIGHT_MAFIA','NIGHT_DOCTOR','NIGHT_POLICE'].includes(currentPhase)){
-    view.policeReport=state.night.checks.map(id=>({targetId:id,name:member(state,id).name,isMafia:member(state,id).role==='MAFIA'}));
+  if(player.role==='POLICE'){
+    const reports=(state.policeHistory||[]).filter(report=>
+      report.submittedBy?.includes(player.id)||(!report.submittedBy&&
+      state.night?.picks.NIGHT_POLICE[player.id]&&report.round===state.round));
+    if(reports.length)view.policeReport=reports.map(({submittedBy,...report})=>report);
   }
   if(state.phase==='VOTE_2')view.runoff={candidates:[...state.runoff.candidates]};
   if(state.phase==='RESULTS') {view.lastEliminations=[...state.lastEliminations];view.resultTallies={...state.resultTallies};}
