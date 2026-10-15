@@ -88,3 +88,57 @@ test('natural expiry advances discussion exactly once even after duplicate alarm
  await room.room.alarm();assert.equal((await room.room.load()).phase,'VOTE');
  await room.room.alarm();assert.equal((await room.room.load()).phase,'VOTE');
 });
+
+
+test('simultaneous joining of 30 players keeps all unique seats',async()=>{
+  const {call}=harness(),init=(await call('/api/rooms','POST',{})).data;
+  const joined=await Promise.all(Array.from({length:30},(_,i)=>call(`/api/rooms/${init.code}/join`,'POST',{name:`Guest ${i+1}`})));
+  assert.ok(joined.every(r=>r.status===201),'All thirty guest joins must succeed');
+  const state=(await call(`/api/rooms/${init.code}/state`,'GET',undefined,init.token)).data.state;
+  assert.equal(state.roster.length,30);
+  assert.equal(new Set(state.roster.map(p=>p.id)).size,30);
+  assert.equal(new Set(state.roster.map(p=>p.name)).size,30);
+  const overflow=await call(`/api/rooms/${init.code}/join`,'POST',{name:'Guest 31'});
+  assert.equal(overflow.status,400);
+});
+
+test('WebSocket handshake rejects unauthenticated and cross-session credentials',async()=>{
+  const {call,getRoom}=harness();
+  const init=(await call('/api/rooms','POST',{})).data;
+  const player=(await call(`/api/rooms/${init.code}/join`,'POST',{name:'Guest'})).data;
+  const state=await getRoom(init.code).room.load();
+  const {websocketIdentity}=await import('../worker/index.js');
+  assert.equal(websocketIdentity(state,'mafia'),null);
+  assert.equal(websocketIdentity(state,'mafia, t-invalid'),null);
+  assert.equal(websocketIdentity(state,`other, t-${init.token}`),null);
+  assert.deepEqual(websocketIdentity(state,`mafia, t-${init.token}`),{id:'HOST',token:init.token});
+  assert.deepEqual(websocketIdentity(state,`mafia, t-${player.token}`),{id:'p1',token:player.token});
+});
+
+test('two simultaneous host transitions cannot advance the phase twice',async()=>{
+  const {call}=harness(),init=(await call('/api/rooms','POST',{})).data;
+  await Promise.all(Array.from({length:7},(_,i)=>call(`/api/rooms/${init.code}/join`,'POST',{name:`Guest ${i+1}`})));
+  const room=`/api/rooms/${init.code}`;
+  const state=(await call(`${room}/state`,'GET',undefined,init.token)).data.state;
+  const command={type:'LOCK',expectedVersion:state.version};
+  const responses=await Promise.all([
+    call(`${room}/action`,'POST',command,init.token),
+    call(`${room}/action`,'POST',command,init.token)
+  ]);
+  assert.deepEqual(responses.map(r=>r.status).sort(),[200,400]);
+  assert.equal((await call(`${room}/state`,'GET',undefined,init.token)).data.state.phase,'CONFIG');
+});
+
+test('WebSocket room broadcast sends player-specific redacted snapshots',async()=>{
+  const {call,getRoom}=harness(),init=(await call('/api/rooms','POST',{})).data;
+  const player=(await call(`/api/rooms/${init.code}/join`,'POST',{name:'Guest'})).data;
+  const room=getRoom(init.code),sent=[];
+  room.ctx.acceptWebSocket({deserializeAttachment:()=>({id:'p1'}),send:raw=>sent.push(JSON.parse(raw))});
+  await room.room.push(await room.room.load());
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].state.kind,'PLAYER');
+  assert.equal(sent[0].state.roster.length,1);
+  assert.equal(sent[0].state.roster[0].role,undefined);
+  assert.equal(JSON.stringify(sent[0]).includes(init.token),false);
+  assert.equal(JSON.stringify(sent[0]).includes(player.token),false);
+});

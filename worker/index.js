@@ -4,37 +4,40 @@ const HEADERS = {'content-type':'application/json; charset=utf-8','cache-control
 const PHASE_ROLE = {NIGHT_MAFIA:'MAFIA',NIGHT_DOCTOR:'DOCTOR',NIGHT_POLICE:'POLICE'};
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:HEADERS});
 const failure=(msg,status)=>json({error:msg},status);
-const token=()=>[crypto.randomUUID(),crypto.randomUUID()].join('-');
+const token=()=>Array.from(crypto.getRandomValues(new Uint8Array(32)),n=>n.toString(16).padStart(2,'0')).join('');
 const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const roomCode=()=>Array.from(crypto.getRandomValues(new Uint8Array(6)),n=>alphabet[n%alphabet.length]).join('');
 const bearer=request=>{const header=request.headers.get('authorization')||'';return /^Bearer\s+\S+$/i.test(header)?header.replace(/^Bearer\s+/i,''):null;};
-const allowed=(state,credential)=>state?.hostToken===credential||state?.players.some(p=>p.token===credential);
+const allowed=(state,credential)=>Boolean(credential)&&(state?.hostToken===credential||state?.players.some(p=>p.token===credential));
+export function websocketIdentity(state,offered=''){
+  const protocols=offered.split(',').map(s=>s.trim());
+  if(!protocols.includes('mafia'))return null;
+  const raw=protocols.find(p=>/^t-[a-f0-9]{64}$/.test(p));
+  if(!raw||!allowed(state,raw.slice(2)))return null;
+  const token=raw.slice(2);
+  return {id:state.hostToken===token?'HOST':state.players.find(p=>p.token===token).id,token};
+}
 const enforceJson=async request=>{const raw=await request.text();if(raw.length>8192)throw new Error('Request is too large');try{return JSON.parse(raw||'{}');}catch{throw new Error('Invalid JSON');}};
 
 export class MafiaRoom {
-  constructor(ctx,env){this.ctx=ctx;this.env=env;}
+  constructor(ctx,env){this.ctx=ctx;this.env=env;this.serialQueue=Promise.resolve();}
+  serialize(work){const next=this.serialQueue.then(work);this.serialQueue=next.catch(()=>{});return next;}
   async load(){return await this.ctx.storage.get('state');}
   async save(state){await this.ctx.storage.put('state',state);await this.schedule(state);}
   async schedule(state){if(state.deadline){await this.ctx.storage.setAlarm(state.deadline);}else{await this.ctx.storage.deleteAlarm();}}
-  async alarm(){const state=await this.load();if(state&&['DISCUSS','DISCUSS_2'].includes(state.phase)&&state.deadline&&Date.now()>=state.deadline){
+  async alarm(){return this.serialize(async()=>{const state=await this.load();if(state&&['DISCUSS','DISCUSS_2'].includes(state.phase)&&state.deadline&&Date.now()>=state.deadline){
     const updated=dispatch(state,state.hostToken,{type:'END_DISCUSSION',expectedVersion:state.version});
     await this.save(updated);await this.push(updated);
-  }}
+  }});}
   async push(state){for(const socket of this.ctx.getWebSockets()){
     const principal=socket.deserializeAttachment();if(!principal?.id)continue;
     const credential=principal.id==='HOST'?state.hostToken:state.players.find(p=>p.id===principal.id)?.token;
     if(!credential){try{socket.close(1008,'Session expired');}catch{}continue;}
     try{socket.send(JSON.stringify({type:'STATE',state:viewFor(state,credential)}));}catch{}
   }}
-  async webSocketMessage(socket,message){let data;try{data=JSON.parse(message);}catch{return;}
-    if(data?.type!=='AUTH'||socket.deserializeAttachment()?.id)return;
-    const state=await this.load();if(!state||!allowed(state,data.token)){socket.close(1008,'Invalid session');return;}
-    const id=state.hostToken===data.token?'HOST':state.players.find(p=>p.token===data.token).id;
-    socket.serializeAttachment({id});
-    socket.send(JSON.stringify({type:'STATE',state:viewFor(state,data.token)}));
-  }
+  async webSocketMessage(_socket,_message){/* All WebSocket identities are authenticated at handshake. Clients receive server-pushed snapshots only. */}
   autoSkip(state){while(PHASE_ROLE[state.phase]&&!state.players.some(p=>p.alive&&p.role===PHASE_ROLE[state.phase])){state=dispatch(state,state.hostToken,{type:'FINALIZE_NIGHT',method:'skip',expectedVersion:state.version});}return state;}
-  async fetch(request){const url=new URL(request.url),route=url.pathname.split('/').filter(Boolean).at(-1);
+  async fetch(request){return this.serialize(async()=>{const url=new URL(request.url),route=url.pathname.split('/').filter(Boolean).at(-1);
     try{
       if(route==='init'&&request.method==='POST'){
         const existing=await this.load();if(existing)return failure('Room code unavailable',409);
@@ -45,9 +48,16 @@ export class MafiaRoom {
       }
       if(route==='ws'){
         if(request.headers.get('upgrade')?.toLowerCase()!=='websocket')return failure('WebSocket required',426);
-        const pair=new WebSocketPair(),[client,server]=Object.values(pair);
+        const state=await this.load();
+        const principal=websocketIdentity(state,request.headers.get('sec-websocket-protocol')||'');
+        if(!principal)return failure('WebSocket session invalid',401);
+        const origin=request.headers.get('origin');
+        if(origin&&origin!==new URL(request.url).origin)return failure('Origin not allowed',403);
         if(this.ctx.getWebSockets().length>=40)return failure('Room connection limit reached',429);
-        this.ctx.acceptWebSocket(server);return new Response(null,{status:101,webSocket:client});
+        const pair=new WebSocketPair(),[client,server]=Object.values(pair);
+        this.ctx.acceptWebSocket(server);server.serializeAttachment({id:principal.id});
+        server.send(JSON.stringify({type:'STATE',state:viewFor(state,principal.token)}));
+        return new Response(null,{status:101,webSocket:client,headers:{'sec-websocket-protocol':'mafia'}});
       }
       if(route==='join'&&request.method==='POST'){
         const data=await enforceJson(request),guestToken=token();
@@ -68,7 +78,7 @@ export class MafiaRoom {
       }
       return failure('Not found',404);
     }catch(err){return failure(err?.message||'Unable to process action',400);}
-  }
+  });}
 }
 
 export default {
