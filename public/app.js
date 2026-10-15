@@ -4,6 +4,7 @@ const store='ad-arcade-mafia-session-v1';
 let session=JSON.parse(localStorage.getItem(store)||'null'),state=null,ws=null,selected=[],revealed=false,formConfig=null,returnHome=false,lastVersion=-1;
 const h=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const name=id=>state?.roster?.find(p=>p.id===id)?.name||id;
+const eliminatedName=id=>{const p=state?.roster?.find(x=>x.id===id);return p?`${h(p.name)}${p.role?' ('+h(p.role)+')':''}`:h(id);};
 const getPhase=()=>state?.phase||'';
 const roleIcons={MAFIA:'♠',POLICE:'⚖',DOCTOR:'✚',CIVILIAN:'♣'};
 const phaseText={LOBBY:'The Gathering',CONFIG:'Set the Rules',DEAL:'The Cards Are Dealt',NIGHT_MAFIA:'Mafia, Awake',NIGHT_DOCTOR:'Doctors, Awake',NIGHT_POLICE:'Police, Awake',MORNING:'The Morning After',DISCUSS:'The Interrogation',VOTE:'The Verdict',DISCUSS_2:'One Final Argument',VOTE_2:'The Final Vote',RESULTS:'The Judgment',GAME_OVER:'The Final Reveal',ENDED:'The Party Has Ended'};
@@ -52,8 +53,8 @@ function hostView(){const phase=getPhase();let content=phaseHeading();
  if(phase.startsWith('NIGHT_')){
  const cfg={NIGHT_MAFIA:{label:'Mafia',count:state.config.kills},NIGHT_DOCTOR:{label:'Doctors',count:state.config.saves},NIGHT_POLICE:{label:'Police',count:state.config.checks}}[phase];
  const n=state.night||{counts:{},consensus:[],active:0,submitted:0};
- content+=panel('Read Aloud',`<p class="script">“Everyone, close your eyes. ${phase==='NIGHT_MAFIA'?'Mafia':phase==='NIGHT_DOCTOR'?'Doctors':'Police'}, open your eyes.”</p>`);
- content+=panel('Live Night Dashboard',`${progress('Living actors submitted',n.submitted,n.active)}<div class="countline"><span>Unanimous selections</span><strong>${n.consensus?.length||0} / ${cfg.count}</strong></div>${state.roster.filter(p=>p.alive).map(p=>`<div class="countline"><span>${h(p.name)} ${n.consensus?.includes(p.id)?'✓':''}</span><strong>${n.counts?.[p.id]||0}</strong></div>`).join('')}<p class="note">Counts do not identify which actor selected each target.</p>`);
+ content+=panel('Read Aloud',`<p class="script">“Everyone, close your eyes. ${phase==='NIGHT_MAFIA'?'Mafia':phase==='NIGHT_DOCTOR'?'Doctors':'Police'}, open your eyes.”</p><p class="note">After finalizing this phase, tell the acting group to close their eyes.</p>`);
+ content+=panel('Live Night Dashboard',`${progress('Living actors submitted',n.submitted,n.active)}<div class="countline"><span>Unanimous selections</span><strong>${n.consensus?.length||0} / ${cfg.count}</strong></div>${state.roster.filter(p=>p.alive).map(p=>`<div class="countline"><span>${h(p.name)} ${n.consensus?.includes(p.id)?'✓':''} ${n.savedMatches?.includes(p.id)?'🛟 SAVED':''}</span><strong>${n.counts?.[p.id]||0}</strong></div>`).join('')}<p class="note">Counts do not identify which actor selected each target.</p>`);
  const candidates=state.roster.filter(p=>p.alive&&n.counts?.[p.id]);
  content+=panel('Finalize This Phase',`<p class="note">Consensus accepts exactly ${cfg.count} unanimously selected names. Most-voted requires the host to resolve any ties at the cutoff. Select tied names below if necessary.</p><div class="targetgrid">${candidates.map(p=>`<button class="target ${selected.includes(p.id)?'selected':''}" data-target="${p.id}">${h(p.name)} (${n.counts[p.id]})</button>`).join('')}</div><div class="buttonrow">${button('FINALIZE CONSENSUS','consensus','secondary')}${button('MOST VOTED / BREAK TIE','majority')}${button('SKIP THIS PHASE','skip','quiet')}</div>`);
  }
@@ -69,7 +70,7 @@ function hostView(){const phase=getPhase();let content=phaseHeading();
  content+=panel('Running Tally',`${Object.entries(tally).map(([id,n])=>`<div class="countline"><span>${h(name(id))}</span><strong>${n}</strong></div>`).join('')||'<p class="muted">No votes yet.</p>'}`);
  content+=button(phase==='VOTE'?'CLOSE VOTE':'CLOSE FINAL VOTE','closeVote','block');
  }
- if(phase==='RESULTS')content+=panel('Public Results',`${(state.lastEliminations||[]).length?`<p class="script">${state.lastEliminations.map(id=>h(name(id))).join(', ')} voted out.</p>`:'<p class="script">The town could not agree. No one was eliminated.</p>'}`)+button('CONTINUE TO NEXT NIGHT','next','block');
+ if(phase==='RESULTS')content+=panel('Public Results',`${(state.lastEliminations||[]).length?`<p class="script">${state.lastEliminations.map(eliminatedName).join(', ')} voted out.</p>`:'<p class="script">The town could not agree. No one was eliminated.</p>'}`)+button('CONTINUE TO NEXT NIGHT','next','block');
  if(phase==='GAME_OVER')content+=panel('The Winner',`<div class="intro"><div class="crest">${state.winner==='TOWN'?'⚖':'♠'}</div><h2>${state.winner==='TOWN'?'TOWN VICTORY':'MAFIA VICTORY'}</h2><p>All identities are revealed.</p></div>${rosterList(true)}`)+button('PLAY AGAIN — SAME PLAYERS','replay','block');
  if(phase==='ENDED')content+=panel('Party Concluded','<p>This room is closed. Create a new room for another game.</p>')+button('START A NEW PARTY','newRoom','block');
  else content+=`<div class="divider"></div>${button('END PARTY','endParty','danger')}`;
@@ -95,7 +96,7 @@ function playerView(){const phase=getPhase();const self=state.self;let content=p
  const allowed=state.roster.filter(p=>p.alive&&p.id!==self.id&&(phase==='VOTE'||state.runoffCandidates?.includes(p.id)));
  return content+panel(phase==='VOTE'?'CAST YOUR SECRET VOTE':'VOTE AGAIN — TIED CANDIDATES',`${state.myVote?'<div class="notice">Vote locked. Nobody else can see your choice.</div>':`<p class="note">One choice only. Your host can see it, but other players cannot.</p><div class="targetgrid">${allowed.map(p=>`<button class="target ${selected.includes(p.id)?'selected':''}" data-target="${p.id}">${h(p.name)}</button>`).join('')}<button class="target ${selected.includes('ABSTAIN')?'selected':''}" data-target="ABSTAIN">ABSTAIN</button></div><div class="buttonrow">${button('LOCK SECRET VOTE','ballot','block')}</div>`}`);
  }
- if(phase==='RESULTS')return content+panel('The Town Has Spoken',`${(state.lastEliminations||[]).length?`<p class="script">${state.lastEliminations.map(id=>h(name(id))).join(', ')} ${state.lastEliminations.length===1?'was':'were'} voted out.</p>`:'<p class="script">“The town could not agree. Nobody leaves.”</p>'}`)+publicExtras();
+ if(phase==='RESULTS')return content+panel('The Town Has Spoken',`${(state.lastEliminations||[]).length?`<p class="script">${state.lastEliminations.map(eliminatedName).join(', ')} ${state.lastEliminations.length===1?'was':'were'} voted out.</p>`:'<p class="script">“The town could not agree. Nobody leaves.”</p>'}`)+publicExtras();
  return content+panel('Waiting for Host','<p class="note">Stay on this screen for the next instruction.</p>');
 }
 function publicExtras(){return state.policeReport?.length?panel('Private Police Report',state.policeReport.map(r=>`<div class="countline"><span>${h(r.name)}</span><strong>${r.isMafia?'🔪 MAFIA':'✓ NOT MAFIA'}</strong></div>`).join('')):'';}
