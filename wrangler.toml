@@ -1,0 +1,14 @@
+name = "ad-arcade-mafia-night"
+main = "worker/index.js"
+compatibility_date = "2026-10-15"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[durable_objects]
+bindings = [{ name = "MAFIA_ROOM", class_name = "MafiaRoom" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MafiaRoom"]

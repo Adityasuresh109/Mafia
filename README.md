@@ -1,18 +1,52 @@
-# Mafia Night — AD Arcade
+# Mafia Night · AD Arcade
 
-A phone-only, host-moderated Mafia party game, based on **Mafia Night BRD v2.0 (2026-10-15)**. Intended for 7–30 players and 1–2 non-playing hosts.
+A dramatic, phone-only Mafia / Werewolf party game for **7–30 players plus exactly one non-playing host**. No accounts, no TV and no paid service required within applicable Cloudflare free-tier quotas.
 
-## Current status: Engine milestone (not playable online yet)
+**Status:** pre-release build, not verified live. Real-device playtest and Cloudflare deployment still required.
 
-This repository begins with an isolated, testable game-rule engine. The Cloudflare Durable Object backend, real-time transport, browser UI and public deployment are **not yet implemented**. Do not use this branch as a real party server or claim it supports 30 connected devices.
+## Gameplay
 
-Run `npm test` using Node.js 22 or later (no install or paid services required for current tests).
+- Host creates a room, copies the join link, and locks the lobby with 7–30 people.
+- Host sets Mafia (less than half), Police (0–3), Doctors (0–3), kill/save/check counts (1–3), and eliminations (1–2).
+- Everyone checks their own secret role on their phone. Only the host sees the full role roster.
+- Host guides the night: Mafia → Doctor → Police. Each group privately locks choices, with unanimous consensus or host tie resolution.
+- Police receives confidential verdicts. Host announces night casualties. Players debate, then cast silent votes.
+- A vote tied at the cutoff goes to a 60-second second discussion and limited runoff; unresolved ties eliminate nobody.
+- Town wins when every Mafia dies. Mafia wins at or above parity with living non-Mafia.
 
-- [Technical design](docs/superpowers/specs/2026-10-15-mafia-night-design.md)
-- [Step-by-step implementation plan](docs/superpowers/plans/2026-10-15-mafia-night-milestones.md)
+## Run locally
 
-## Non-negotiables
+Requires Node.js 22+ and a recent Wrangler CLI.
 
-All private roles, actions, choices, and individual votes must be redacted on the server according to the authenticated user; phones must never receive a different living player's role. Co-host and reconnect tokens must not leak into room URLs. All requested game mechanics are ultimately gated by BRD acceptance tests and real-device load testing.
+```bash
+npm test
+npm install --no-save wrangler
+npx wrangler dev
+```
 
-This project source remains all-rights-reserved (`UNLICENSED`) until the owner chooses a distribution license. Third-party source code is not copied into this repository.
+Open the local URL Wrangler prints. To join from real phones, use a public secure preview/tunnel or deploy to Cloudflare Workers. The `public/` folder alone can display the landing page but **cannot** host a multiplayer game without the Worker.
+
+## Deploy (Cloudflare)
+
+1. Create or sign in to a Cloudflare account and enable the free Workers plan.
+2. From your own trusted development environment, run `npx wrangler login`.
+3. Run `npx wrangler deploy` at the repository root.
+4. Open the verified `workers.dev` URL. Use **Create Room** on the host phone and send the provided guest link to your party.
+
+For automation, add Cloudflare deployment secrets to GitHub Actions instead of committing tokens. Follow `wrangler.toml` for the SQLite-backed Durable Object binding. GitHub Pages alone is insufficient; the Worker is required for authenticated real-time multiplayer.
+
+## Structure
+
+- `src/engine.js` — dependency-free, server-authoritative rules and secret-scoped views
+- `worker/index.js` — Worker APIs and WebSocket-hibernatable room state
+- `public/` — static host and player mobile interface
+- `tests/` — domain and simulated Durable Object API tests
+- `docs/superpowers/` — one-host design and release gates
+
+## Safety and limits
+
+- Host recovery links contain private secrets. Share them only with the host. Guest links contain room codes only.
+- This version exposes no co-host endpoint and no four-digit PIN.
+- Avoid screen peeking during the role reveal; there is no in-app identity list for other living players.
+- The app protects roles and votes on the server. Do not broadcast the raw server state object.
+- **A passing mock test suite is not a substitute for testing in Cloudflare and with 30 real phones.**

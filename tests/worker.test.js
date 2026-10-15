@@ -1,0 +1,90 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import worker, {MafiaRoom} from '../worker/index.js';
+
+function harness(){
+  const rooms=new Map();
+  function getRoom(code){
+    if(!rooms.has(code)){
+      const data=new Map();const sockets=[];
+      const storage={
+        get:async key=>data.get(key),put:async(k,v)=>{data.set(k,v);},
+        setAlarm:async t=>data.set('__alarm',t),deleteAlarm:async()=>data.delete('__alarm')
+      };
+      const ctx={storage,getWebSockets:()=>sockets,acceptWebSocket:s=>sockets.push(s)};
+      rooms.set(code,{data,ctx,room:new MafiaRoom(ctx,{})});
+    }
+    return rooms.get(code);
+  }
+  const env={MAFIA_ROOM:{idFromName:code=>code,get:code=>({fetch:request=>getRoom(code).room.fetch(request)})},ASSETS:{fetch:()=>Promise.resolve(new Response('ok'))}};
+  async function call(url,method='GET',body,token){
+    const headers={};if(body!==undefined)headers['content-type']='application/json';if(token)headers.authorization=`Bearer ${token}`;
+    const response=await worker.fetch(new Request(`https://example.test${url}`,{method,headers,body:body===undefined?undefined:JSON.stringify(body)}),env);
+    return {status:response.status,data:await response.json()};
+  }
+  return {rooms,env,getRoom,call};
+}
+
+test('one-host room creation and authenticated guest admission',async()=>{
+ const {call}=harness();const init=await call('/api/rooms','POST',{});
+ assert.equal(init.status,201);assert.match(init.data.code,/^[A-HJ-NP-Z2-9]{6}$/);
+ const {code,token}=init.data;
+ const join=await call(`/api/rooms/${code}/join`,'POST',{name:'Alice'});
+ assert.equal(join.status,201);assert.equal(join.data.state.kind,'PLAYER');
+ assert.equal(join.data.state.roster.length,1);
+ const unauthorized=await call(`/api/rooms/${code}/state`);assert.equal(unauthorized.status,401);
+ const host=await call(`/api/rooms/${code}/state`,'GET',undefined,token);
+ assert.equal(host.data.state.kind,'HOST');assert.equal(host.data.state.hostCount,1);
+ const forged=await call(`/api/rooms/${code}/action`,'POST',{type:'LOCK',expectedVersion:2},join.data.token);
+ assert.equal(forged.status,400);
+ const pin=await call(`/api/rooms/${code}/action`,'POST',{type:'COHOST_JOIN',pin:'0000'},join.data.token);
+ assert.equal(pin.status,400);
+});
+
+test('host action requires current state version and player views never expose votes',async()=>{
+ const {call}=harness(),init=(await call('/api/rooms','POST',{})).data;
+ const players=[];for(let i=0;i<7;i++) players.push((await call(`/api/rooms/${init.code}/join`,'POST',{name:`Guest ${i+1}`})).data);
+ const url=`/api/rooms/${init.code}/action`;
+ const host=async(type,extra={})=>{
+   const latest=(await call(`/api/rooms/${init.code}/state`,'GET',undefined,init.token)).data.state;
+   return call(url,'POST',{type,expectedVersion:latest.version,...extra},init.token);
+ };
+ let result=await host('LOCK');assert.equal(result.data.state.phase,'CONFIG');
+ result=await host('CONFIGURE',{config:{mafia:2,police:1,doctors:1,kills:1,saves:1,checks:1,boots:1,discussionSeconds:180}});
+ result=await host('DEAL');
+ const roles=result.data.state.roster.map(p=>p.role);assert.equal(roles.filter(r=>r==='MAFIA').length,2);
+ const playerState=(await call(`/api/rooms/${init.code}/state`,'GET',undefined,players[0].token)).data.state;
+ assert.ok(playerState.roster.every(p=>!Object.hasOwn(p,'role')));
+ assert.ok(!JSON.stringify(playerState).includes(init.token));
+ const oldVersion=result.data.state.version;
+ result=await host('NEXT');assert.equal(result.data.state.phase,'NIGHT_MAFIA');
+ const stale=await call(url,'POST',{type:'NEXT',expectedVersion:oldVersion},init.token);
+ assert.equal(stale.status,400);assert.match(stale.data.error,/stale/i);
+ for(let i=0;i<3;i++)await host('FINALIZE_NIGHT',{method:'skip'});
+ await host('ANNOUNCE');await host('START_DISCUSSION');await host('END_DISCUSSION');
+ result=await call(url,'POST',{type:'BALLOT',targetId:'p2'},players[0].token);assert.equal(result.status,200);
+ const v=(await call(`/api/rooms/${init.code}/state`,'GET',undefined,players[2].token)).data.state;
+ assert.equal(v.ballots,undefined);assert.equal(v.myVote,undefined);
+ const hv=(await call(`/api/rooms/${init.code}/state`,'GET',undefined,init.token)).data.state;
+ assert.equal(hv.ballots.p1,'p2');
+});
+
+test('Durable Object storage survives room object reconstruction',async()=>{
+ const {getRoom,call,env}=harness(),init=(await call('/api/rooms','POST',{})).data;
+ const slot=getRoom(init.code);slot.room=new MafiaRoom(slot.ctx,env);
+ const state=(await call(`/api/rooms/${init.code}/state`,'GET',undefined,init.token)).data.state;
+ assert.equal(state.code,init.code);assert.equal(state.kind,'HOST');
+});
+
+test('natural expiry advances discussion exactly once even after duplicate alarm',async()=>{
+ const {call,getRoom}=harness(),init=(await call('/api/rooms','POST',{})).data;
+ let s=(await call(`/api/rooms/${init.code}/state`,'GET',undefined,init.token)).data.state;
+ for(let i=0;i<7;i++)await call(`/api/rooms/${init.code}/join`,'POST',{name:`P${i}`});
+ const host=async(type,extra={})=>{s=(await call(`/api/rooms/${init.code}/state`,'GET',undefined,init.token)).data.state;return call(`/api/rooms/${init.code}/action`,'POST',{type,expectedVersion:s.version,...extra},init.token);};
+ await host('LOCK');await host('CONFIGURE',{config:{mafia:2,police:1,doctors:1,kills:1,saves:1,checks:1,boots:1,discussionSeconds:60}});
+ await host('DEAL');await host('NEXT');for(let i=0;i<3;i++)await host('FINALIZE_NIGHT',{method:'skip'});
+ await host('ANNOUNCE');await host('START_DISCUSSION');
+ const room=getRoom(init.code),raw=await room.room.load();raw.deadline=Date.now()-1;await room.room.save(raw);
+ await room.room.alarm();assert.equal((await room.room.load()).phase,'VOTE');
+ await room.room.alarm();assert.equal((await room.room.load()).phase,'VOTE');
+});
