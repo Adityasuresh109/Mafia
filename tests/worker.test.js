@@ -142,3 +142,43 @@ test('WebSocket room broadcast sends player-specific redacted snapshots',async()
   assert.equal(JSON.stringify(sent[0]).includes(init.token),false);
   assert.equal(JSON.stringify(sent[0]).includes(player.token),false);
 });
+
+test('21-player night with K2 S2 C2 resolves saved kills and private police verdicts',async()=>{
+  const {call}=harness(),init=(await call('/api/rooms','POST',{})).data;
+  const guests=[];
+  for(let i=0;i<21;i++)guests.push((await call(`/api/rooms/${init.code}/join`,'POST',{name:`Guest ${i+1}`})).data);
+  const base=`/api/rooms/${init.code}`;
+  const host=async(type,extra={})=>{
+    const s=(await call(`${base}/state`,'GET',undefined,init.token)).data.state;
+    const r=await call(`${base}/action`,'POST',{type,expectedVersion:s.version,...extra},init.token);
+    assert.equal(r.status,200,`${type} failed: ${r.data.error||''}`);
+    return r.data.state;
+  };
+  await host('LOCK');
+  await host('CONFIGURE',{config:{mafia:5,police:2,doctors:2,kills:2,saves:2,checks:2,boots:2,discussionSeconds:180}});
+  let hv=await host('DEAL');assert.equal(hv.roster.filter(p=>p.role==='MAFIA').length,5);
+  await host('NEXT');
+  const civilians=hv.roster.filter(p=>p.role==='CIVILIAN'),mafia=hv.roster.filter(p=>p.role==='MAFIA'),doctors=hv.roster.filter(p=>p.role==='DOCTOR'),police=hv.roster.filter(p=>p.role==='POLICE');
+  const tokenFor=id=>guests[Number(id.slice(1))-1].token;
+  let r=await call(`${base}/action`,'POST',{type:'NIGHT_PICK',targets:[civilians[0].id,civilians[1].id]},tokenFor(mafia[0].id));assert.equal(r.status,200);
+  await host('FINALIZE_NIGHT',{method:'consensus'});
+  r=await call(`${base}/action`,'POST',{type:'NIGHT_PICK',targets:[civilians[0].id,doctors[0].id]},tokenFor(doctors[0].id));assert.equal(r.status,200);
+  await host('FINALIZE_NIGHT',{method:'consensus'});
+  r=await call(`${base}/action`,'POST',{type:'NIGHT_PICK',targets:[mafia[0].id,mafia[1].id]},tokenFor(police[0].id));assert.equal(r.status,200);
+  await host('FINALIZE_NIGHT',{method:'consensus'});
+  hv=(await call(`${base}/state`,'GET',undefined,init.token)).data.state;assert.equal(hv.phase,'MORNING');assert.deepEqual(hv.pendingDeaths,[civilians[1].id]);
+  const copView=(await call(`${base}/state`,'GET',undefined,tokenFor(police[0].id))).data.state;
+  assert.equal(copView.policeReport.length,2);assert.ok(copView.policeReport.every(x=>x.isMafia));
+  assert.equal(hv.policeReport,undefined);
+  const nonCop=(await call(`${base}/state`,'GET',undefined,tokenFor(civilians[0].id))).data.state;
+  assert.equal(nonCop.policeReport,undefined);
+  await host('ANNOUNCE');hv=await host('START_DISCUSSION');assert.equal(hv.phase,'DISCUSS');
+  hv=await host('END_DISCUSSION');assert.equal(hv.phase,'VOTE');
+  const living=hv.roster.filter(p=>p.alive);
+  for(const voter of living){
+    const targetId=voter.id===mafia[0].id?mafia[1].id:mafia[0].id;
+    const ballot=await call(`${base}/action`,'POST',{type:'BALLOT',targetId},tokenFor(voter.id));
+    assert.equal(ballot.status,200);
+  }
+  hv=await host('CLOSE_VOTE');assert.ok(['RESULTS','DISCUSS_2','GAME_OVER'].includes(hv.phase));
+});
