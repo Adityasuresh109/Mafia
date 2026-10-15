@@ -169,7 +169,7 @@ test('21-player night with K2 S2 C2 resolves saved kills and private police verd
   hv=(await call(`${base}/state`,'GET',undefined,init.token)).data.state;assert.equal(hv.phase,'MORNING');assert.deepEqual(hv.pendingDeaths,[civilians[1].id]);
   const copView=(await call(`${base}/state`,'GET',undefined,tokenFor(police[0].id))).data.state;
   assert.equal(copView.policeReport.length,2);assert.ok(copView.policeReport.every(x=>x.isMafia));
-  assert.equal(hv.policeReport,undefined);
+  assert.deepEqual(hv.policeReport,mafia.slice(0,2).map(p=>({round:1,targetId:p.id,name:p.name,isMafia:true})));
   const nonCop=(await call(`${base}/state`,'GET',undefined,tokenFor(civilians[0].id))).data.state;
   assert.equal(nonCop.policeReport,undefined);
   await host('ANNOUNCE');hv=await host('START_DISCUSSION');assert.equal(hv.phase,'DISCUSS');
