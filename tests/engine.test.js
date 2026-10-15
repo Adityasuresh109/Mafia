@@ -100,7 +100,7 @@ test('Doctor save cancels a kill and police verdicts are private to submitting o
   assert.deepEqual(s.night.deaths,[]);
   assert.deepEqual(viewFor(s,cop.token).policeReport,[{targetId:mafia.id,name:mafia.name,isMafia:true}]);
   assert.equal(viewFor(s,doctor.token).policeReport,undefined);
-  assert.equal(viewFor(s,HOST).policeReport,undefined);
+  assert.deepEqual(viewFor(s,HOST).policeReport,[{round:1,targetId:mafia.id,name:mafia.name,isMafia:true}]);
   s=host(s,'ANNOUNCE');
   assert.equal(s.announcement,'No one died last night.');
 });
