@@ -18,7 +18,7 @@ export function createGame({roomCode,hostToken}) {
   ASSERT(typeof hostToken==='string'&&hostToken.length>0,'Missing primary host credential');
   return {
     code:roomCode, version:0, phase:'LOBBY', hostToken, players:[], nextPlayerId:1, config:null, round:0,
-    night:null, ballots:{}, runoff:null, deadline:null, policeHistory:[],
+    night:null, ballots:{}, runoff:null, deadline:null, policeHistory:[], publicHistory:[],
     announcement:null, announced:false, lastEliminations:[], resultTallies:{}, winner:null,
   };
 }
@@ -199,6 +199,10 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
       s.announcement=names.length?`${names.map(p=>`${p.name} (${p.role})`).join(', ')} died last night.`:'No one died last night.';
       eliminate(s,s.night.deaths);
       s.announced=true;
+      // Persist only after the host has publicly announced this night's outcome.
+      const killed=names.map(p=>`${p.name} (${p.role})`);
+      const nightText=killed.length?`${killed.join(', ')} ${killed.length===1?'was':'were'} killed.`:'No one died.';
+      s.publicHistory=[...(s.publicHistory||[]),{key:`night-${s.round}`,text:`Night ${s.round} — ${nightText}`}];
       break;
     }
     case 'START_DISCUSSION': {
@@ -238,6 +242,12 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
         if(s.phase!=='GAME_OVER')s.phase='RESULTS';
       }
       s.deadline=null;
+      // A runoff is not a completed day vote; publish only the final result.
+      if(['RESULTS','GAME_OVER'].includes(s.phase)){
+        const ousted=s.lastEliminations.map(id=>member(s,id));
+        const dayText=ousted.length?`${ousted.map(p=>`${p.name} (${p.role})`).join(', ')} ${ousted.length===1?'was':'were'} voted out.`:'No one was voted out.';
+        s.publicHistory=[...(s.publicHistory||[]),{key:`day-${s.round}`,text:`Day ${s.round} — ${dayText}`}];
+      }
       break;
     }
     case 'END_ROOM': {
@@ -246,7 +256,7 @@ export function dispatch(state,actorToken,command,now=Date.now(),rng=rngDefault)
     case 'PLAY_AGAIN': {
       ASSERT(s.phase==='GAME_OVER','Play again requires a finished game-over session');s.players.forEach(p=>{p.alive=true;p.role=null;});
       s.phase='CONFIG';s.round=0;s.night=null;s.ballots={};s.runoff=null;s.deadline=null;
-      s.announcement=null;s.announced=false;s.winner=null;s.lastEliminations=[];s.resultTallies={};s.policeHistory=[];break;
+      s.announcement=null;s.announced=false;s.winner=null;s.lastEliminations=[];s.resultTallies={};s.policeHistory=[];s.publicHistory=[];break;
     }
     default:throw new Error('Unknown command');
   }
@@ -261,6 +271,7 @@ export function viewFor(state,token) {
   const basic={code:state.code,version:state.version,phase:state.phase,round:state.round,
     config:state.config?{...state.config}:null,deadline:state.deadline,
     announced:state.announced,announcement:state.announced?state.announcement:null,
+    publicHistory:(state.publicHistory||[]).map(event=>({...event})),
     winner:state.winner};
   const isHost=Boolean(host);
   const roster=state.players.map(p=>{
