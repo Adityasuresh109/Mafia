@@ -4,6 +4,15 @@ Worker: `ad-arcade-mafia-night`
 Production URL: https://ad-arcade-mafia-night.adityasuresh2110.workers.dev  
 Deployment: Cloudflare Workers; SQLite-backed Durable Objects persist separately from Worker versions.
 
+## Pinned, production-verified stabilization release
+
+- Source commit (game and runtime): `e491178d7e8755c2252e0ef43831a3f09bc7d992`
+- Cloudflare version ID: `34da72d7-3ec5-4be4-b684-ccaa7a0ba177`
+- Production verification: https://github.com/Adityasuresh109/Mafia/actions/runs/38823567567 (successful second attempt).
+- Evidence: **33/33 automated tests**, real Cloudflare **60-second runoff alarm**, Doctor save, two rounds of Police checks, revealed roles, persisted public history, restricted voting and Town victory; basic room/join/host-recovery security smoke passed.
+- The deployment workflow was subsequently switched to **manual dispatch only**, with serialized deployments. Workflow/docs commits after the source commit do not change this pinned Worker version.
+- **Rollback target:** Use this version ID as the first-choice known-good rollback target until a newer version passes the same gates.
+
 ## Known-good release before stabilization
 
 - Source commit: `4aa40eec0e84c82170b1472ecfa5923e67467e68`
