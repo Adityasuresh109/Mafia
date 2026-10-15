@@ -20,6 +20,10 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
+      - name: Verify live runoff, police reports and ordinary game flow
+        env:
+          MAFIA_URL: https://ad-arcade-mafia-night.adityasuresh2110.workers.dev
+        run: node scripts/smoke-regressions.mjs
       - name: Smoke-test public game and room API
         env:
           MAFIA_URL: https://ad-arcade-mafia-night.adityasuresh2110.workers.dev
