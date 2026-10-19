@@ -132,3 +132,18 @@ test('Doctor save, both victory conditions, full final reveal, and PLAY_AGAIN re
  assert.equal(m.phase,'GAME_OVER');assert.equal(m.winner,'MAFIA');
  assert.ok(viewFor(m,m.players[0].token).roster.every(p=>p.role));
 });
+
+test('host, living player and dead player see the same server-synchronized 60-second voting deadline',()=>{
+ let s=night(setup());s=host(s,'ANNOUNCE');s=host(s,'START_DISCUSSION');s=host(s,'END_DISCUSSION');
+ const deadline=Date.now()+37000;
+ const hostSnapshot={...viewFor(s,H),deadline};
+ const alive=s.players.find(p=>p.alive);
+ const playerSnapshot={...viewFor(s,alive.token),deadline};
+ assert.match(client(hostSnapshot).markup(),/data-countdown>00:3[67]</);
+ assert.match(client(playerSnapshot).markup(),/data-countdown>00:3[67]</);
+ const deceasedSnapshot={...playerSnapshot,self:{...playerSnapshot.self,alive:false}};
+ assert.match(client(deceasedSnapshot).markup(),/data-countdown>00:3[67]</);
+ const recovered={...playerSnapshot,version:playerSnapshot.version+1,deadline:Date.now()+15000};
+ const c=client(recovered);
+ assert.match(c.markup(),/data-countdown>00:1[45]</);
+});
