@@ -4,7 +4,19 @@ Worker: `ad-arcade-mafia-night`
 Production URL: https://ad-arcade-mafia-night.adityasuresh2110.workers.dev  
 Deployment: Cloudflare Workers; SQLite-backed Durable Objects persist separately from Worker versions.
 
-## Pinned, production-verified stabilization release
+## Pinned, production-verified October 18 playtest release
+
+- Gameplay and interface source commit: `66a6203c74c8b86ec77b0301ae5963cb2f007cce` (PR #5).
+- Cloudflare-deployed workflow commit: `a37e9edd6420aab0bd2f21661e14d28afda682cd` (same gameplay code).
+- **First-choice rollback Worker version:** `6e12e16f-b771-4ac6-9e07-b5d41327c035`
+- Verified production deployment: https://github.com/Adityasuresh109/Mafia/actions/runs/39181674996
+- Evidence: **40/40 automated tests**, live 60-second runoff discussion, 60-second auto-closing vote, early host vote closure, role-redacted player history, complete room/host recovery, Doctor save, Police secrecy, and Town victory.
+- The temporary one-time release workflow was removed immediately after verification. The normal `.github/workflows/deploy.yml` still requires explicit manual workflow dispatch.
+- **Release changes:** discreet one-second self-role card, names-only player deaths/history while retaining full host details, server-timed 60-second votes in both voting phases.
+
+## Previous verified stabilization release (fallback)
+
+
 
 - Source commit (game and runtime): `e491178d7e8755c2252e0ef43831a3f09bc7d992`
 - Cloudflare version ID: `34da72d7-3ec5-4be4-b684-ccaa7a0ba177`
