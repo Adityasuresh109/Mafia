@@ -29,9 +29,9 @@ test('no private night result leaks before the host publicly announces it',()=>{
  s=endNight(s,true);
  assert.deepEqual(viewFor(s,guest.token).publicHistory,[]);
  s=act(s,H,'ANNOUNCE');
- const text='Night 1 — '+victim.name+' ('+victim.role+') was killed.';
+ const text='Night 1 — '+victim.name+' was killed.';
  assert.deepEqual(viewFor(s,guest.token).publicHistory,[{key:'night-1',text}]);
- assert.deepEqual(viewFor(s,H).publicHistory,[{key:'night-1',text}]);
+ assert.deepEqual(viewFor(s,H).publicHistory,[{key:'night-1',text:'Night 1 — '+victim.name+' ('+victim.role+') was killed.'}]);
  assert.equal(viewFor(s,guest.token).policeReport,undefined);
  const legacy=structuredClone(s);delete legacy.publicHistory;
  assert.deepEqual(viewFor(legacy,guest.token).publicHistory,[]);
@@ -44,7 +44,9 @@ test('a completed vote adds a public Day entry without revealing ballots',()=>{
  s=act(s,H,'CLOSE_VOTE');
  assert.equal(s.phase,'RESULTS');
  assert.deepEqual(viewFor(s,s.players[0].token).publicHistory.map(e=>e.key),['night-1','day-1']);
- assert.match(viewFor(s,s.players[0].token).publicHistory[1].text,/MAFIA.*voted out/);
+ assert.match(viewFor(s,s.players[0].token).publicHistory[1].text,/was voted out/);
+ assert.doesNotMatch(viewFor(s,s.players[0].token).publicHistory[1].text,/\(MAFIA\)/);
+ assert.match(viewFor(s,H).publicHistory[1].text,/\(MAFIA\)/);
  assert.equal(viewFor(s,s.players[0].token).ballots,undefined);
 });
 test('rounds missed while disconnected render on a brand-new phone with empty storage',()=>{

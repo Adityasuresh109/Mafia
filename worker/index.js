@@ -35,8 +35,9 @@ export class MafiaRoom {
   async load(){return await this.ctx.storage.get('state');}
   async save(state){await this.ctx.storage.put('state',state);await this.schedule(state);}
   async schedule(state){if(state.deadline){await this.ctx.storage.setAlarm(state.deadline);}else{await this.ctx.storage.deleteAlarm();}}
-  async alarm(){return this.serialize(async()=>{const state=await this.load();if(state&&['DISCUSS','DISCUSS_2'].includes(state.phase)&&state.deadline&&Date.now()>=state.deadline){
-    const updated=dispatch(state,state.hostToken,{type:'END_DISCUSSION',expectedVersion:state.version});
+  async alarm(){return this.serialize(async()=>{const state=await this.load();if(state&&['DISCUSS','DISCUSS_2','VOTE','VOTE_2'].includes(state.phase)&&state.deadline&&Date.now()>=state.deadline){
+    const type=['VOTE','VOTE_2'].includes(state.phase)?'CLOSE_VOTE':'END_DISCUSSION';
+     const updated=dispatch(state,state.hostToken,{type,expectedVersion:state.version},Date.now());
     await this.save(updated);await this.push(updated);
   }});}
   async push(state){for(const socket of this.ctx.getWebSockets()){

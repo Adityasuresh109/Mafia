@@ -15,7 +15,7 @@ test('runoff discussion retains its 60-second deadline and Durable Object alarm 
  const map=new Map([['state',s]]);const storage={get:async k=>map.get(k),put:async(k,v)=>map.set(k,v),setAlarm:async()=>{},deleteAlarm:async()=>{}};
  const room=new MafiaRoom({storage,getWebSockets:()=>[]},{});
  s.deadline=Date.now()-1;await room.save(s);await room.alarm();const updated=await room.load();
- assert.equal(updated.phase,'VOTE_2');assert.equal(updated.deadline,null);const version=updated.version;
+ assert.equal(updated.phase,'VOTE_2');assert.ok(updated.deadline>Date.now());const version=updated.version;
  await room.alarm();assert.equal((await room.load()).version,version);
 });
 
@@ -33,12 +33,13 @@ test('Police see only their own cumulative results with rounds; civilians see no
  assert.deepEqual(viewFor(s,HOST).policeReport.map(r=>r.round),[1,2]);
 });
 
-test('roles publicly revealed during earlier nights remain visible',()=>{
+test('roles of dead players remain hidden from guests but available to host',()=>{
  let s=setup();const victim=s.players.find(p=>p.role==='CIVILIAN'),killer=s.players.find(p=>p.role==='MAFIA');
  s=act(s,killer.token,'NIGHT_PICK',{targets:[victim.id]});s=host(s,'FINALIZE_NIGHT',{method:'consensus'});
  s=host(s,'FINALIZE_NIGHT',{method:'skip'});s=host(s,'FINALIZE_NIGHT',{method:'skip'});
  s=host(s,'ANNOUNCE');s=host(s,'START_DISCUSSION');s=host(s,'END_DISCUSSION');s=host(s,'CLOSE_VOTE');s=host(s,'NEXT');
- assert.equal(viewFor(s,s.players.find(p=>p.id!==victim.id).token).roster.find(p=>p.id===victim.id).role,'CIVILIAN');
+ assert.equal(viewFor(s,s.players.find(p=>p.id!==victim.id).token).roster.find(p=>p.id===victim.id).role,undefined);
+ assert.equal(viewFor(s,HOST).roster.find(p=>p.id===victim.id).role,'CIVILIAN');
 });
 
 test('room permits more than 40 WebSocket connections during reconnect churn',async()=>{
