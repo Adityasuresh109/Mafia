@@ -73,7 +73,7 @@ test('names-only player announcements, role-free roster and history, host retain
 
 test('legacy rooms created before privacy update redact old historical role annotations for players',()=>{
  let s=setup();s=night(s);s=host(s,'ANNOUNCE');
- s.publicHistory=[{key:'night-1',text:'Night 1 — Alex (MAFIA), Bev (DOCTOR) were killed.'},{key:'day-1',text:'Day 1 — Cam (CIVILIAN) was voted out.'}];
+ s.hostHistory=[];s.publicHistory=[{key:'night-1',text:'Night 1 — Alex (MAFIA), Bev (DOCTOR) were killed.'},{key:'day-1',text:'Day 1 — Cam (CIVILIAN) was voted out.'}];
  const guest=s.players.find(p=>p.role==='CIVILIAN');
  const p=viewFor(s,guest.token),h=viewFor(s,H);
  assert.ok(p.publicHistory.every(x=>!/(MAFIA|DOCTOR|CIVILIAN)/.test(x.text)));
@@ -91,7 +91,7 @@ test('both normal and runoff votes start 60s deadlines, host early close clears 
  let t=night(setup(7));t=host(t,'ANNOUNCE');t=host(t,'START_DISCUSSION');t=host(t,'END_DISCUSSION');
  const a=t.players[0],b=t.players[1];
  // 3 votes each plus 1 abstain; never self-vote.
- for(let i=0;i<t.players.length;i++){const p=t.players[i],target=i<3?a.id:i<6?b.id:'ABSTAIN';t=action(t,p.token,'BALLOT',{targetId:target===p.id?'ABSTAIN':target});}
+ for(let i=0;i<t.players.length;i++){const p=t.players[i],target=[b.id,a.id,b.id,a.id,b.id,a.id,'ABSTAIN'][i];t=action(t,p.token,'BALLOT',{targetId:target===p.id?'ABSTAIN':target});}
  // Make tie explicit via two selected names if the self-vote adjustment changes results.
  const ballots=Object.values(t.ballots).filter(id=>id!=='ABSTAIN');
  assert.ok(ballots.length>=4);
