@@ -14,3 +14,10 @@
 .story li{margin:7px 0;overflow-wrap:anywhere}
 .story .note{margin:0 0 15px}
 @media(max-width:460px){.join-qr svg{width:min(212px,100%)}.story{margin-top:18px}}
+
+/* Oct 18: compact private peek; no sweeping animation or large visual cue. */
+.role-peek{position:fixed;z-index:7;top:92px;right:max(10px,env(safe-area-inset-right));width:42px;height:38px;display:grid;place-items:center;border:1px solid #584c52;border-radius:6px;background:#201b22;color:#897980;font-size:17px;font-weight:600;letter-spacing:0;box-shadow:0 3px 12px #0006;opacity:.85;padding:4px;transition:none}
+.role-peek.is-revealed{width:96px;background:#272128;color:#d9bb90;font-size:11px;letter-spacing:.2px;opacity:1}
+.role-peek:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.vote-timer{font-size:clamp(38px,11vw,64px);margin:10px auto 13px;line-height:1.1}
+@media(max-width:460px){.role-peek{top:79px;right:max(9px,env(safe-area-inset-right))}}
