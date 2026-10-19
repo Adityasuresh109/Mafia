@@ -1,0 +1,77 @@
+name: Mafia Night Oct18 One-Time Production Release
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-oct18-once.yml'
+concurrency:
+  group: mafia-night-production
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+      - name: Deploy Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+      - name: Verify live runoff, police reports and ordinary game flow
+        env:
+          MAFIA_URL: https://ad-arcade-mafia-night.adityasuresh2110.workers.dev
+        run: |
+          # Durable Object upgrades propagate globally over a short window.
+          # Retry with disposable test rooms, never any party's live room.
+          for attempt in 1 2 3 4; do
+            if node scripts/smoke-regressions.mjs; then
+              echo "Full production regression suite passed."
+              exit 0
+            fi
+            echo "Production regression attempt $attempt failed; checking Worker propagation."
+            sleep 20
+          done
+          echo "Production regression checks failed after 4 attempts. Roll back immediately."
+          exit 1
+      - name: Smoke-test public game and room API
+        env:
+          MAFIA_URL: https://ad-arcade-mafia-night.adityasuresh2110.workers.dev
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const base = process.env.MAFIA_URL;
+          const landing = await fetch(base);
+          assert.equal(landing.status, 200, 'public landing page');
+          assert.match(await landing.text(), /MAFIA/i, 'landing page contains game branding');
+          const assets = await fetch(base + '/app.js');
+          assert.equal(assets.status, 200, 'mobile application asset');
+          const created = await fetch(base + '/api/rooms', {method:'POST'});
+          assert.equal(created.status, 201, 'room creation');
+          const host = await created.json();
+          assert.match(host.code, /^[A-HJ-NP-Z2-9]{6}$/, 'six-character room code');
+          assert.match(host.token, /^[a-f0-9]{64}$/, 'private recovery credential');
+          assert.equal(host.state.kind, 'HOST');
+          const room = base + '/api/rooms/' + host.code;
+          const joined = await fetch(room + '/join', {
+            method: 'POST',
+            headers: {'content-type':'application/json'},
+            body: JSON.stringify({name:'Smoke Guest'})
+          });
+          assert.equal(joined.status, 201, 'guest join');
+          const guest = await joined.json();
+          assert.equal(guest.state.kind, 'PLAYER');
+          const recovered = await fetch(room + '/state', {
+            headers: {authorization:'Bearer ' + host.token}
+          });
+          assert.equal(recovered.status, 200, 'host state recover');
+          const unauthorized = await fetch(room + '/state');
+          assert.equal(unauthorized.status, 401, 'unauthorized state blocked');
+          console.log('PRODUCTION SMOKE PASSED: landing, asset, room, join, host recovery and access control');
+          NODE
