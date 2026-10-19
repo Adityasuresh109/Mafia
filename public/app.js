@@ -68,6 +68,17 @@ document.addEventListener?.('visibilitychange',updateWakeLock);
 
 let session=JSON.parse(localStorage.getItem(store)||'null'),state=null,ws=null,selected=[],revealed=false,formConfig=null,returnHome=false,lastVersion=-1;
 let lastConnectionErrorAt=0,lastReconnectAttemptAt=0,reconnectDelayMs=4000;
+let rolePeekVisible=false,rolePeekTimeout=null;
+function hideRolePeek(){if(rolePeekTimeout!==null)clearTimeout(rolePeekTimeout);rolePeekTimeout=null;rolePeekVisible=false;}
+function showRolePeek(){
+ if(!state?.self?.role)return;
+ hideRolePeek();rolePeekVisible=true;render();
+ rolePeekTimeout=setTimeout(()=>{rolePeekVisible=false;rolePeekTimeout=null;render();},1000);
+}
+function peekControl(){
+ if(state?.kind!=='PLAYER'||!state.self?.role||['LOBBY','CONFIG','ENDED'].includes(state.phase))return '';
+ return `<button class="role-peek ${rolePeekVisible?'is-revealed':''}" type="button" data-act="rolePeek" aria-label="Peek at your role briefly" title="Your role">${rolePeekVisible?h(state.self.role):'♠'}</button>`;
+}
 const h=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const name=id=>state?.roster?.find(p=>p.id===id)?.name||id;
 const eliminatedName=id=>{const p=state?.roster?.find(x=>x.id===id);return p?`${h(p.name)}${p.role?' ('+h(p.role)+')':''}`:h(id);};
@@ -99,7 +110,7 @@ function putState(snapshot){if(!snapshot)return;if(state?.code===snapshot.code&&
 async function refresh(){if(!session)return false;try{const data=await request(endpoint('state'));putState(data.state);setOnline(true);lastConnectionErrorAt=0;reconnectDelayMs=4000;return true;}catch(error){setOnline(false);if(Date.now()-lastConnectionErrorAt>=30000){alertMsg(error.message);lastConnectionErrorAt=Date.now();}reconnectDelayMs=Math.min(reconnectDelayMs*2,30000);return false;}}
 function connect(){if(ws){ws.onclose=null;ws.close();}if(!session)return;
  try{ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}${endpoint('ws')}`,['mafia','t-'+session.token]);ws.onopen=()=>setOnline(true);ws.onmessage=e=>{try{const msg=JSON.parse(e.data);if(msg.type==='STATE')putState(msg.state);}catch{}};ws.onclose=()=>{setOnline(false);};ws.onerror=()=>setOnline(false);}catch{setOnline(false);}}
-function remember(s){session={code:s.code,token:s.token};saved();state=s.state;lastVersion=-1;selected=[];revealed=false;returnHome=false;putState(s.state);connect();}
+function remember(s){hideRolePeek();session={code:s.code,token:s.token};saved();state=s.state;lastVersion=-1;selected=[];revealed=false;returnHome=false;putState(s.state);connect();}
 function home(){return `<div class="intro"><div class="crest">♠</div><div class="subtitle">A GAME OF TRUST AND BETRAYAL</div><h1>MAFIA<br><span class="gold">NIGHT</span></h1><p class="lede">Gather your friends. Hide your secrets. Survive the night. One host. Up to 30 players. Just your phones and your poker faces.</p></div><div class="twocol"><section class="card"><h3>Host a Game</h3><p class="note">Create your private party room and guide the night.</p>${button('CREATE ROOM','create','block')}</section><section class="card"><h3>Join the Table</h3><form id="join"><label class="formfield"><span>6-Character Room Code</span><input class="field" name="code" minlength="6" maxlength="6" required placeholder="ABC234" value="${h(new URLSearchParams(location.hash.slice(1)).get('join')||'')}"></label><label class="formfield"><span>Your Name</span><input class="field" name="name" maxlength="20" minlength="2" required placeholder="Enter your name"></label><button class="btn block" type="submit">JOIN PARTY →</button></form></section></div>`;}
 function hostView(){const phase=getPhase();let content=phaseHeading();
  content+=`<div class="statgrid"><div class="stat"><b>${state.roster.length}</b><span>Players</span></div><div class="stat"><b>${state.roster.filter(p=>p.alive).length}</b><span>Alive</span></div><div class="stat"><b>${state.round}</b><span>Round</span></div></div>`;
@@ -132,6 +143,7 @@ function hostView(){const phase=getPhase();let content=phaseHeading();
  }
  if(phase==='DISCUSS'||phase==='DISCUSS_2')content+=panel('Discussion in Progress',`<div class="timer" data-countdown>${countdown()}</div><p class="note center">All player clocks use the same server deadline. You can close early.</p>`)+button('END DISCUSSION EARLY','endDiscuss','block');
  if(phase==='VOTE'||phase==='VOTE_2'){
+ content+=panel('Voting closes in',`<div class="timer vote-timer" data-countdown>${countdown()}</div>`);
  const tally={};Object.values(state.ballots||{}).forEach(id=>{tally[id]=(tally[id]||0)+1;});
  content+=panel('Secret Votes — Host Only',`${progress('Ballots submitted',Object.keys(state.ballots||{}).length,state.roster.filter(p=>p.alive).length)}${state.roster.filter(p=>p.alive).map(p=>`<div class="countline"><span>${h(p.name)}</span><span>${state.ballots?.[p.id]?h(name(state.ballots[p.id])):'Not yet voted'}</span></div>`).join('')}`);
  content+=panel('Running Tally',`${Object.entries(tally).map(([id,n])=>`<div class="countline"><span>${h(name(id))}</span><strong>${n}</strong></div>`).join('')||'<p class="muted">No votes yet.</p>'}`);
@@ -150,7 +162,7 @@ function playerView(){const phase=getPhase();const self=state.self;let content=p
  if(phase==='DEAL')return content+(!revealed?`<div class="rolecard"><div class="symbol">♠</div><h2>YOUR SECRET</h2><p>Shield your phone before revealing.</p>${button('TAP TO REVEAL','reveal')}</div>`:roleCard(self));
  if(phase==='GAME_OVER')return content+panel(state.winner==='TOWN'?'TOWN VICTORY':'MAFIA VICTORY',`<p>Every secret is now public.</p>${rosterList(true)}`);
  if(phase==='ENDED')return content+panel('Party Ended','<p>Your host has ended the room. Thanks for playing.</p>')+button('RETURN HOME','newRoom','block');
- if(!self.alive)return content+panel('You Have Been Eliminated','<p class="script">“The dead keep their secrets. Watch the living decide their fate.”</p>')+publicExtras();
+ if(!self.alive)return content+(['VOTE','VOTE_2'].includes(phase)?panel('Voting closes in',`<div class="timer vote-timer" data-countdown>${countdown()}</div>`):'')+panel('You Have Been Eliminated','<p class="script">“The dead keep their secrets. Watch the living decide their fate.”</p>')+publicExtras();
  if(phase.startsWith('NIGHT_')){
  if(!state.canAct)return content+panel('Eyes Closed',`<div class="intro"><div class="crest">☾</div><p class="script">“Keep your eyes closed. Remain silent.”</p></div>`);
  const count=phase==='NIGHT_MAFIA'?state.config.kills:phase==='NIGHT_DOCTOR'?state.config.saves:state.config.checks;
@@ -161,14 +173,14 @@ function playerView(){const phase=getPhase();const self=state.self;let content=p
  if(phase==='DISCUSS'||phase==='DISCUSS_2')return content+panel('Defend Your Innocence',`<div class="timer" data-countdown>${countdown()}</div><p class="note center">Talk. Accuse. Persuade. Your phone will show the vote when the timer ends.</p>`)+publicExtras();
  if(phase==='VOTE'||phase==='VOTE_2'){
  const allowed=state.roster.filter(p=>p.alive&&p.id!==self.id&&(phase==='VOTE'||state.runoff?.candidates?.includes(p.id)));
- return content+panel(phase==='VOTE'?'CAST YOUR SECRET VOTE':'VOTE AGAIN — TIED CANDIDATES',`${state.myVote?'<div class="notice">Vote locked. Nobody else can see your choice.</div>':`<p class="note">One choice only. Your host can see it, but other players cannot.</p><div class="targetgrid">${allowed.map(p=>`<button class="target ${selected.includes(p.id)?'selected':''}" data-target="${p.id}">${h(p.name)}</button>`).join('')}<button class="target ${selected.includes('ABSTAIN')?'selected':''}" data-target="ABSTAIN">ABSTAIN</button></div><div class="buttonrow">${button('LOCK SECRET VOTE','ballot','block')}</div>`}`);
+ return content+panel(phase==='VOTE'?'CAST YOUR SECRET VOTE':'VOTE AGAIN — TIED CANDIDATES',`<div class="timer vote-timer" data-countdown>${countdown()}</div>${state.myVote?'<div class="notice">Vote locked. Nobody else can see your choice.</div>':`<p class="note">One choice only. Your host can see it, but other players cannot.</p><div class="targetgrid">${allowed.map(p=>`<button class="target ${selected.includes(p.id)?'selected':''}" data-target="${p.id}">${h(p.name)}</button>`).join('')}<button class="target ${selected.includes('ABSTAIN')?'selected':''}" data-target="ABSTAIN">ABSTAIN</button></div><div class="buttonrow">${button('LOCK SECRET VOTE','ballot','block')}</div>`}`);
  }
  if(phase==='RESULTS')return content+panel('The Town Has Spoken',`${(state.lastEliminations||[]).length?`<p class="script">${state.lastEliminations.map(eliminatedName).join(', ')} ${state.lastEliminations.length===1?'was':'were'} voted out.</p>`:'<p class="script">“The town could not agree. Nobody leaves.”</p>'}`)+publicExtras();
  return content+panel('Waiting for Host','<p class="note">Stay on this screen for the next instruction.</p>');
 }
 function publicExtras(){return state.policeReport?.length?panel('Private Police Report',state.policeReport.map(r=>`<div class="countline"><span>${r.round?`Round ${r.round} · `:''}${h(r.name)}</span><strong>${r.isMafia?'🔪 MAFIA':'✓ NOT MAFIA'}</strong></div>`).join('')):'';}
 function roleCard(self){const descriptions={MAFIA:'At night, secretly choose whom the town loses.',DOCTOR:'At night, choose who will survive an attack.',POLICE:'At night, investigate the identity of others.',CIVILIAN:'Discover the Mafia through discussion and voting.'};return `<div class="rolecard"><div class="symbol">${roleIcons[self.role]||'♠'}</div><div class="eyecap">YOUR ROLE IS</div><h2>${h(self.role)}</h2><p>${descriptions[self.role]||''}</p><p class="tiny muted">No other player's role is visible.</p></div>`;}
-function render(){if(returnHome||!session||!state){app.innerHTML=home();status.textContent='● READY';updateWakeLock();return;}app.innerHTML=(state.kind==='HOST'?hostView():playerView())+storyMarkup();}
+function render(){if(returnHome||!session||!state){app.innerHTML=home();status.textContent='● READY';updateWakeLock();return;}app.innerHTML=(state.kind==='HOST'?hostView():playerView())+storyMarkup()+peekControl();}
 async function copyText(text){try{await navigator.clipboard.writeText(text);alertMsg('Copied to clipboard.');}catch{alertMsg('Could not copy. Please copy the link manually.');}}
 app.addEventListener('toggle',e=>{if(e.target.matches?.('details.story'))storyExpanded=e.target.open;},true);
 app.addEventListener('submit',async e=>{e.preventDefault();const form=e.target;
@@ -180,7 +192,8 @@ app.addEventListener('click',async e=>{
  const target=e.target.closest('[data-target]');if(target){const id=target.dataset.target;
  if(state?.phase?.startsWith('NIGHT_')){const max=state.phase==='NIGHT_MAFIA'?state.config.kills:state.phase==='NIGHT_DOCTOR'?state.config.saves:state.config.checks;selected=selected.includes(id)?selected.filter(x=>x!==id):selected.length<max?[...selected,id]:selected;}else if(state?.phase?.startsWith('VOTE'))selected=[id];render();return;}
  const btn=e.target.closest('[data-act]');if(!btn)return;const action=btn.dataset.act;
- if(action==='newRoom'){if(ws){ws.onclose=null;ws.close();}localStorage.removeItem(store);session=null;state=null;selected=[];storyEntries=[];storyKey='';storyExpanded=false;lastActionKey=null;returnHome=false;updateWakeLock();history.replaceState(null,'',location.pathname);return render();}
+ if(action==='rolePeek'){showRolePeek();return;}
+ if(action==='newRoom'){hideRolePeek();if(ws){ws.onclose=null;ws.close();}localStorage.removeItem(store);session=null;state=null;selected=[];storyEntries=[];storyKey='';storyExpanded=false;lastActionKey=null;returnHome=false;updateWakeLock();history.replaceState(null,'',location.pathname);return render();}
  if(action==='create'){btn.disabled=true;try{const data=await request('/api/rooms',{method:'POST',body:{},authenticated:false});remember(data);}catch(error){alertMsg(error.message);btn.disabled=false;}return;}
  if(action==='invite')return copyText(joinUrl(session.code));
  if(action==='recover')return copyText(`${location.origin}${location.pathname}#host=${session.token}&room=${session.code}`);
