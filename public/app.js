@@ -75,7 +75,7 @@ function showRolePeek(){
  hideRolePeek();rolePeekVisible=true;render();
  rolePeekTimeout=setTimeout(()=>{rolePeekVisible=false;rolePeekTimeout=null;render();},1000);
 }
-document.addEventListener?.('visibilitychange',()=>{if(document.visibilityState==='hidden'&&rolePeekVisible)hideRolePeek();});
+document.addEventListener?.('visibilitychange',()=>{if(document.visibilityState==='hidden'&&rolePeekVisible){hideRolePeek();render();}});
 function peekControl(){
  if(state?.kind!=='PLAYER'||!state.self?.role||['LOBBY','CONFIG','ENDED'].includes(state.phase))return '';
  return `<button class="role-peek ${rolePeekVisible?'is-revealed':''}" type="button" data-act="rolePeek" aria-label="Peek at your role briefly" title="Your role">${rolePeekVisible?h(state.self.role):'♠'}</button>`;
